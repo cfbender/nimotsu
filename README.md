@@ -101,7 +101,7 @@ Google classifies `gmail.readonly` as a restricted scope. A publicly distributed
    mise exec -- aube run android:apk
    ```
 
-The APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`. On first launch, enter the HTTPS URL of your Nimotsu server and its API token. Android 13+ requires the user to grant notification permission; the app asks only when **Enable notifications** is tapped.
+The APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`. On first launch, enter the HTTPS URL of your Nimotsu server and its API token. Android 13+ requires the user to grant notification permission; the app asks when notifications are enabled or tested from Settings.
 
 ### Signed CI builds
 

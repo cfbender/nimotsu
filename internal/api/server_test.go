@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -65,7 +66,7 @@ func (f *fakeProvider) callCount() int {
 
 func TestCreatePackageWithoutConfiguredTracker(t *testing.T) {
 	dataStore := openTestStore(t)
-	handler := New(dataStore, nil, nil, "", nil, testLogger())
+	handler := New(dataStore, nil, nil, "", nil, nil, testLogger())
 	response := postJSON(handler, "/api/packages", `{"description":"Headphones","tracking_number":"1Z999AA10123456784"}`)
 
 	if response.Code != http.StatusCreated {
@@ -82,7 +83,7 @@ func TestCreatePackageWithoutConfiguredTracker(t *testing.T) {
 
 func TestRenamePackage(t *testing.T) {
 	dataStore := openTestStore(t)
-	handler := New(dataStore, nil, nil, "", nil, testLogger())
+	handler := New(dataStore, nil, nil, "", nil, nil, testLogger())
 	created := postJSON(handler, "/api/packages", `{"description":"Headphones","tracking_number":"1Z999AA10123456784"}`)
 	if created.Code != http.StatusCreated {
 		t.Fatalf("create status = %d, body = %s", created.Code, created.Body.String())
@@ -129,7 +130,7 @@ func TestCreateAndRestorePackageRegistersWithProvider(t *testing.T) {
 			EstimatedDeliveryAt: &estimatedDeliveryAt,
 		},
 	}}
-	handler := New(dataStore, provider, nil, "", nil, testLogger())
+	handler := New(dataStore, provider, nil, "", nil, nil, testLogger())
 
 	created := postJSON(handler, "/api/packages", `{"description":"Headphones","tracking_number":"9400110898825022579493","carrier":"USPS"}`)
 	if created.Code != http.StatusCreated {
@@ -197,7 +198,7 @@ func TestPackageTrackingEventsAndCarrierDetection(t *testing.T) {
 			LastEventAt:   &registeredAt,
 		}},
 	}}
-	handler := New(dataStore, provider, nil, "", nil, testLogger())
+	handler := New(dataStore, provider, nil, "", nil, nil, testLogger())
 
 	carrierRequest := httptest.NewRequest(http.MethodGet, "/api/tracking/carrier?tracking_number=1Z999AA10123456784", nil)
 	carrierResponse := httptest.NewRecorder()
@@ -242,7 +243,7 @@ func TestPackageTrackingEventsAndCarrierDetection(t *testing.T) {
 
 func TestUnconfiguredGmailEndpoints(t *testing.T) {
 	dataStore := openTestStore(t)
-	handler := New(dataStore, nil, nil, "", nil, testLogger())
+	handler := New(dataStore, nil, nil, "", nil, nil, testLogger())
 
 	statusRequest := httptest.NewRequest(http.MethodGet, "/api/gmail/status", nil)
 	statusResponse := httptest.NewRecorder()
@@ -259,6 +260,70 @@ func TestUnconfiguredGmailEndpoints(t *testing.T) {
 	}
 }
 
+func TestTestNotificationRequiresFirebase(t *testing.T) {
+	dataStore := openTestStore(t)
+	handler := New(dataStore, nil, nil, "", nil, nil, testLogger())
+	response := postJSON(handler, "/api/notifications/test", "")
+
+	if response.Code != http.StatusServiceUnavailable || !bytes.Contains(response.Body.Bytes(), []byte("Firebase push notifications are not configured")) {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
+func TestTestNotificationRequiresRegisteredDevice(t *testing.T) {
+	dataStore := openTestStore(t)
+	called := false
+	handler := New(dataStore, nil, nil, "", nil, func(context.Context, []string) (int, error) {
+		called = true
+		return 0, nil
+	}, testLogger())
+	response := postJSON(handler, "/api/notifications/test", "")
+
+	if response.Code != http.StatusConflict || !bytes.Contains(response.Body.Bytes(), []byte("enable notifications on a device")) {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if called {
+		t.Fatal("test push callback was called without a registered device")
+	}
+}
+
+func TestTestNotificationSendsToRegisteredDevices(t *testing.T) {
+	dataStore := openTestStore(t)
+	for _, token := range []string{"first-token", "second-token"} {
+		if err := dataStore.RegisterDevice(t.Context(), token, "android"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var received []string
+	handler := New(dataStore, nil, nil, "", nil, func(_ context.Context, tokens []string) (int, error) {
+		received = append(received, tokens...)
+		return len(tokens), nil
+	}, testLogger())
+	response := postJSON(handler, "/api/notifications/test", "")
+
+	if response.Code != http.StatusOK || response.Body.String() != "{\"sent\":2}\n" {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if len(received) != 2 || received[0] != "first-token" || received[1] != "second-token" {
+		t.Fatalf("tokens = %v", received)
+	}
+}
+
+func TestTestNotificationReportsSendFailure(t *testing.T) {
+	dataStore := openTestStore(t)
+	if err := dataStore.RegisterDevice(t.Context(), "device-token", "android"); err != nil {
+		t.Fatal(err)
+	}
+	handler := New(dataStore, nil, nil, "", nil, func(context.Context, []string) (int, error) {
+		return 0, errors.New("Firebase unavailable")
+	}, testLogger())
+	response := postJSON(handler, "/api/notifications/test", "")
+
+	if response.Code != http.StatusBadGateway || !bytes.Contains(response.Body.Bytes(), []byte("Firebase did not accept the test notification")) {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
 func TestAcceptEmailCandidateRegistersPackageWithProvider(t *testing.T) {
 	dataStore := openTestStore(t)
 	if err := dataStore.SaveEmailCandidates(t.Context(), []store.EmailCandidate{{
@@ -272,7 +337,7 @@ func TestAcceptEmailCandidateRegistersPackageWithProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	provider := &fakeProvider{registration: tracking.Registration{Update: tracking.Update{Carrier: "UPS", Status: "InTransit"}}}
-	handler := New(dataStore, provider, nil, "", nil, testLogger())
+	handler := New(dataStore, provider, nil, "", nil, nil, testLogger())
 	request := httptest.NewRequest(http.MethodPost, "/api/gmail/candidates/candidate-1/accept", nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -311,7 +376,7 @@ func TestTrackingWebhookIsIdempotent(t *testing.T) {
 		LastEventAt:    &eventAt,
 	}}
 	notifications := make(chan store.Package, 2)
-	handler := New(dataStore, provider, nil, "", func(updated store.Package) { notifications <- updated }, testLogger())
+	handler := New(dataStore, provider, nil, "", func(updated store.Package) { notifications <- updated }, nil, testLogger())
 
 	for delivery := 0; delivery < 2; delivery++ {
 		request := httptest.NewRequest(http.MethodPost, "/api/webhooks/tracking", bytes.NewBufferString(`{}`))

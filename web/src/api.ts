@@ -118,6 +118,10 @@ export async function registerDevice(token: string): Promise<void> {
   })
 }
 
+export async function sendTestNotification(): Promise<{ sent: number }> {
+  return request<{ sent: number }>('/api/notifications/test', { method: 'POST' })
+}
+
 export async function getGmailStatus(): Promise<GmailStatus> {
   return request<GmailStatus>('/api/gmail/status')
 }

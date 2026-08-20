@@ -27,16 +27,18 @@ type Server struct {
 	gmail            *gmail.Service
 	apiToken         string
 	onTrackingUpdate func(store.Package)
+	sendTestPush     func(context.Context, []string) (int, error)
 	logger           *slog.Logger
 }
 
-func New(dataStore *store.Store, trackerClient tracking.Provider, gmailService *gmail.Service, apiToken string, onTrackingUpdate func(store.Package), logger *slog.Logger) http.Handler {
+func New(dataStore *store.Store, trackerClient tracking.Provider, gmailService *gmail.Service, apiToken string, onTrackingUpdate func(store.Package), sendTestPush func(context.Context, []string) (int, error), logger *slog.Logger) http.Handler {
 	server := &Server{
 		store:            dataStore,
 		tracker:          trackerClient,
 		gmail:            gmailService,
 		apiToken:         apiToken,
 		onTrackingUpdate: onTrackingUpdate,
+		sendTestPush:     sendTestPush,
 		logger:           logger,
 	}
 
@@ -49,6 +51,7 @@ func New(dataStore *store.Store, trackerClient tracking.Provider, gmailService *
 	mux.Handle("DELETE /api/packages/{id}", server.authorize(http.HandlerFunc(server.archivePackage)))
 	mux.Handle("GET /api/tracking/carrier", server.authorize(http.HandlerFunc(server.detectCarrier)))
 	mux.Handle("POST /api/devices", server.authorize(http.HandlerFunc(server.registerDevice)))
+	mux.Handle("POST /api/notifications/test", server.authorize(http.HandlerFunc(server.testNotification)))
 	mux.Handle("GET /api/gmail/status", server.authorize(http.HandlerFunc(server.gmailStatus)))
 	mux.Handle("POST /api/gmail/oauth/start", server.authorize(http.HandlerFunc(server.startGmailOAuth)))
 	mux.HandleFunc("GET /api/gmail/oauth/callback", server.completeGmailOAuth)
@@ -261,6 +264,32 @@ func (s *Server) registerDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) testNotification(w http.ResponseWriter, r *http.Request) {
+	if s.sendTestPush == nil {
+		writeError(w, http.StatusServiceUnavailable, "Firebase push notifications are not configured on this server")
+		return
+	}
+	tokens, err := s.store.ListDeviceTokens(r.Context())
+	if err != nil {
+		s.internalError(w, "list devices for test notification", err)
+		return
+	}
+	if len(tokens) == 0 {
+		writeError(w, http.StatusConflict, "enable notifications on a device before sending a test")
+		return
+	}
+	sent, err := s.sendTestPush(r.Context(), tokens)
+	if sent == 0 {
+		s.logger.Error("send test notification", "error", err)
+		writeError(w, http.StatusBadGateway, "Firebase did not accept the test notification")
+		return
+	}
+	if err != nil {
+		s.logger.Warn("some test notifications failed", "sent", sent, "failed", len(tokens)-sent, "error", err)
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"sent": sent})
 }
 
 func (s *Server) gmailStatus(w http.ResponseWriter, r *http.Request) {

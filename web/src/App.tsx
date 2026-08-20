@@ -16,6 +16,7 @@ import {
   listTrackingEvents,
   renamePackage,
   saveConnectionSettings,
+  sendTestNotification,
   setPackageNotifications,
   syncGmail,
   type EmailCandidate,
@@ -531,6 +532,7 @@ function SettingsSheet({
   const [apiToken, setAPIToken] = useState(current.apiToken)
   const [themeMode, setThemeMode] = useState(getThemeMode)
   const [pushState, setPushState] = useState('')
+  const [pushBusy, setPushBusy] = useState(false)
   const [gmailStatus, setGmailStatus] = useState<GmailStatus | null>(null)
   const [gmailAction, setGmailAction] = useState('')
   const [confirmDisconnect, setConfirmDisconnect] = useState(false)
@@ -547,6 +549,7 @@ function SettingsSheet({
   }
 
   async function enablePush() {
+    setPushBusy(true)
     setPushState('Enabling…')
     try {
       saveConnectionSettings({ serverURL, apiToken })
@@ -554,6 +557,24 @@ function SettingsSheet({
       setPushState('Notifications enabled')
     } catch (error) {
       setPushState(error instanceof Error ? error.message : 'Could not enable notifications')
+    } finally {
+      setPushBusy(false)
+    }
+  }
+
+  async function testPush() {
+    setPushBusy(true)
+    setPushState('Registering this device…')
+    try {
+      saveConnectionSettings({ serverURL, apiToken })
+      await enablePushNotifications()
+      setPushState('Sending test notification…')
+      const result = await sendTestNotification()
+      setPushState(result.sent === 1 ? 'Test notification sent' : `Test notification sent to ${result.sent} devices`)
+    } catch (error) {
+      setPushState(error instanceof Error ? error.message : 'Could not send test notification')
+    } finally {
+      setPushBusy(false)
     }
   }
 
@@ -652,8 +673,11 @@ function SettingsSheet({
       {isNative() && (
         <div className="settings-section">
           <h3>Push notifications</h3>
-          <p>Android will ask for notification permission when you enable this.</p>
-          <button className="secondary-button full-width" type="button" onClick={() => void enablePush()}>Enable notifications</button>
+          <p>Enable notifications, then send a test to verify the device, server, and Firebase connection.</p>
+          <div className="push-actions">
+            <button className="secondary-button full-width" disabled={pushBusy} type="button" onClick={() => void enablePush()}>Enable notifications</button>
+            <button className="secondary-button full-width" disabled={pushBusy} type="button" onClick={() => void testPush()}>{pushBusy && pushState.startsWith('Sending') ? 'Sending…' : 'Send test notification'}</button>
+          </div>
           {pushState && <p className="push-state" role="status">{pushState}</p>}
         </div>
       )}

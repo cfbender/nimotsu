@@ -88,6 +88,18 @@ func main() {
 		logger.Warn("Gmail is not configured; email discovery is disabled")
 	}
 
+	sendPush := func(ctx context.Context, tokens []string, title, body, packageID string) (int, error) {
+		sent := 0
+		var sendErrors []error
+		for _, token := range tokens {
+			if err := pushSender.Send(ctx, token, title, body, packageID); err != nil {
+				sendErrors = append(sendErrors, err)
+				continue
+			}
+			sent++
+		}
+		return sent, errors.Join(sendErrors...)
+	}
 	onTrackingUpdate := func(pkg store.Package) {
 		if pushSender == nil {
 			return
@@ -100,14 +112,20 @@ func main() {
 			return
 		}
 		title, body := api.NotificationText(pkg)
-		for _, token := range tokens {
-			if err := pushSender.Send(ctx, token, title, body, pkg.ID); err != nil {
-				logger.Error("send push notification", "error", err)
-			}
+		if _, err := sendPush(ctx, tokens, title, body, pkg.ID); err != nil {
+			logger.Error("send push notifications", "error", err)
+		}
+	}
+	var sendTestPush func(context.Context, []string) (int, error)
+	if pushSender != nil {
+		sendTestPush = func(ctx context.Context, tokens []string) (int, error) {
+			ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			defer cancel()
+			return sendPush(ctx, tokens, "Nimotsu test notification", "Push notifications are working.", "")
 		}
 	}
 
-	apiHandler := api.New(dataStore, trackingClient, gmailService, configuration.APIToken, onTrackingUpdate, logger)
+	apiHandler := api.New(dataStore, trackingClient, gmailService, configuration.APIToken, onTrackingUpdate, sendTestPush, logger)
 	handler := withStaticFiles(apiHandler, configuration.WebDir)
 	server := &http.Server{
 		Addr:              configuration.Listen,

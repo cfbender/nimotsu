@@ -63,7 +63,7 @@ h1 { margin-bottom: 0; font-family: ui-rounded, "Arial Rounded MT Bold", system-
 
 .primary-button, .secondary-button { min-height: 50px; padding: 0 22px; border-radius: 15px; font-weight: 700; cursor: pointer; }
 .primary-button { color: var(--on-green); border: 0; background: var(--green); box-shadow: 0 8px 20px var(--strong-shadow); }
-.primary-button:disabled { opacity: .6; cursor: wait; }
+.primary-button:disabled, .secondary-button:disabled { opacity: .6; cursor: wait; }
 .secondary-button { color: var(--green); border: 1px solid var(--green-border); background: var(--green-soft); }
 .full-width { width: 100%; }
 
@@ -154,6 +154,7 @@ input::placeholder { color: var(--subtle); }
 .settings-section h3 { margin-bottom: 5px; font-size: .9rem; }
 .settings-section p { margin-bottom: 14px; color: var(--muted); font-size: .79rem; line-height: 1.45; }
 .settings-section .push-state { margin: 10px 0 0; text-align: center; }
+.push-actions { display: grid; gap: 9px; }
 .gmail-settings strong { color: var(--ink); }
 .gmail-actions { display: grid; grid-template-columns: 1fr auto; gap: 9px; }
 .gmail-actions .secondary-button { min-height: 46px; }
