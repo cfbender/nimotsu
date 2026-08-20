@@ -1,13 +1,20 @@
 const labels: Record<string, string> = {
   NotFound: 'Not found',
   InfoReceived: 'Label created',
+  Unknown: 'Waiting for update',
+  PreTransit: 'Label created',
   InTransit: 'In transit',
   Expired: 'Tracking expired',
   AvailableForPickup: 'Ready for pickup',
   OutForDelivery: 'Out for delivery',
   DeliveryFailure: 'Delivery issue',
+  Failure: 'Delivery issue',
   Delivered: 'Delivered',
   Exception: 'Exception',
+  Error: 'Tracking error',
+  ReturnToSender: 'Returning to sender',
+  Returned: 'Returned to sender',
+  Cancelled: 'Cancelled',
   Registered: 'Registered',
   Unregistered: 'Saved locally',
   NeedsCarrier: 'Carrier needed',
@@ -16,6 +23,17 @@ const labels: Record<string, string> = {
 
 export function formatStatus(status: string): string {
   return labels[status] ?? (status.replace(/([a-z])([A-Z])/g, '$1 $2') || 'Waiting for update')
+}
+
+export function formatCarrier(carrier: string): string {
+  const known: Record<string, string> = {
+    usps: 'USPS',
+    ups: 'UPS',
+    fedex: 'FedEx',
+    dhl_express: 'DHL Express',
+    shippo: 'Shippo',
+  }
+  return known[carrier.toLowerCase()] ?? carrier.replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
 
 export function formatRelativeDate(value: string | null): string {

@@ -7,7 +7,7 @@ export interface TrackedPackage {
   id: string
   description: string
   tracking_number: string
-  carrier_code: number | null
+  carrier: string
   status: string
   sub_status: string
   latest_message: string
@@ -65,7 +65,7 @@ export async function listPackages(): Promise<TrackedPackage[]> {
 export async function addPackage(input: {
   description: string
   tracking_number: string
-  carrier_code?: number
+  carrier?: string
 }): Promise<TrackedPackage> {
   return request<TrackedPackage>('/api/packages', {
     method: 'POST',

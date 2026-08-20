@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -29,7 +30,7 @@ func TestPackageLifecycle(t *testing.T) {
 	}
 
 	eventAt := time.Date(2026, time.August, 20, 12, 0, 0, 0, time.UTC)
-	updated, changed, err := dataStore.UpdateTracking(ctx, pkg.TrackingNumber, 100003, TrackingUpdate{
+	updated, changed, err := dataStore.UpdateTracking(ctx, pkg.TrackingNumber, "UPS", TrackingUpdate{
 		Status:        "InTransit",
 		SubStatus:     "InTransit_Other",
 		LatestMessage: "Departed facility",
@@ -38,8 +39,34 @@ func TestPackageLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !changed || updated.Status != "InTransit" || updated.CarrierCode == nil || *updated.CarrierCode != 100003 {
+	if !changed || updated.Status != "InTransit" || updated.Carrier != "UPS" {
 		t.Fatalf("unexpected update: changed=%v package=%+v", changed, updated)
+	}
+	duplicate, changed, err := dataStore.UpdateTracking(ctx, pkg.TrackingNumber, "UPS", TrackingUpdate{
+		Status:        "InTransit",
+		SubStatus:     "InTransit_Other",
+		LatestMessage: "Departed facility",
+		LastEventAt:   &eventAt,
+	})
+	if err != nil || changed || duplicate.Status != "InTransit" {
+		t.Fatalf("duplicate update: changed=%v package=%+v error=%v", changed, duplicate, err)
+	}
+	staleAt := eventAt.Add(-time.Hour)
+	stale, changed, err := dataStore.UpdateTracking(ctx, pkg.TrackingNumber, "UPS", TrackingUpdate{
+		Status: "Delivered", LastEventAt: &staleAt,
+	})
+	if err != nil || changed || stale.Status != "InTransit" || !stale.LastEventAt.Equal(eventAt) {
+		t.Fatalf("stale update: changed=%v package=%+v error=%v", changed, stale, err)
+	}
+	newerAt := eventAt.Add(time.Hour)
+	newer, changed, err := dataStore.UpdateTracking(ctx, pkg.TrackingNumber, "UPS", TrackingUpdate{
+		Status:        "InTransit",
+		SubStatus:     "InTransit_Other",
+		LatestMessage: "Departed facility",
+		LastEventAt:   &newerAt,
+	})
+	if err != nil || !changed || !newer.LastEventAt.Equal(newerAt) {
+		t.Fatalf("newer update: changed=%v package=%+v error=%v", changed, newer, err)
 	}
 
 	packages, err := dataStore.ListPackages(ctx)
@@ -48,5 +75,76 @@ func TestPackageLifecycle(t *testing.T) {
 	}
 	if len(packages) != 1 || packages[0].LatestMessage != "Departed facility" {
 		t.Fatalf("packages = %+v", packages)
+	}
+
+	if err := dataStore.ArchivePackage(ctx, pkg.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := dataStore.UpdateTracking(ctx, pkg.TrackingNumber, "UPS", TrackingUpdate{Status: "Delivered"}); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("archived tracking update error = %v, want no rows", err)
+	}
+	restored, err := dataStore.CreatePackage(ctx, NewPackage{
+		Description:    "Headphones again",
+		TrackingNumber: pkg.TrackingNumber,
+		Status:         "Registered",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.ID != pkg.ID || restored.Archived || restored.Description != "Headphones again" || restored.LatestMessage != "" {
+		t.Fatalf("restored package = %+v", restored)
+	}
+	packages, err = dataStore.ListPackages(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(packages) != 1 || packages[0].ID != pkg.ID {
+		t.Fatalf("packages after restore = %+v", packages)
+	}
+}
+
+func TestOpenMigratesExistingPackageCarrier(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nimotsu.db")
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = database.Exec(`
+CREATE TABLE packages (
+    id TEXT PRIMARY KEY,
+    description TEXT NOT NULL,
+    tracking_number TEXT NOT NULL UNIQUE,
+    carrier_code INTEGER,
+    status TEXT NOT NULL,
+    sub_status TEXT NOT NULL DEFAULT '',
+    latest_message TEXT NOT NULL DEFAULT '',
+    last_event_at INTEGER,
+    tracking_error TEXT NOT NULL DEFAULT '',
+    notifications_enabled INTEGER NOT NULL DEFAULT 1,
+    archived INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+INSERT INTO packages (
+    id, description, tracking_number, carrier_code, status, created_at, updated_at
+) VALUES ('package-1', 'Headphones', '9400110898825022579493', 21051, 'RegistrationFailed', 1, 1);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	dataStore, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dataStore.Close()
+	packages, err := dataStore.ListPackages(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(packages) != 1 || packages[0].Carrier != "" || packages[0].TrackingNumber != "9400110898825022579493" {
+		t.Fatalf("migrated packages = %+v", packages)
 	}
 }

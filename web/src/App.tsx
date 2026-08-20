@@ -19,7 +19,7 @@ import {
   type GmailStatus,
   type TrackedPackage,
 } from './api'
-import { formatRelativeDate, formatStatus } from './format'
+import { formatCarrier, formatRelativeDate, formatStatus } from './format'
 import { enablePushNotifications } from './push'
 import { getThemeMode, saveThemeMode, type ThemeMode } from './theme'
 
@@ -142,6 +142,7 @@ export default function App() {
                         <p className="latest-message">{pkg.latest_message || pkg.tracking_error || 'Waiting for a tracking update'}</p>
                         <div className="package-meta">
                           <span>{pkg.tracking_number}</span>
+                          {pkg.carrier && <><span aria-hidden="true">·</span><span>{formatCarrier(pkg.carrier)}</span></>}
                           <span className="package-update"><span aria-hidden="true">·</span> {formatRelativeDate(pkg.last_event_at)}</span>
                         </div>
                       </div>
@@ -161,7 +162,7 @@ export default function App() {
         )}
       </main>
 
-      {packages.length > 0 && (
+      {packages.length > 0 && !sheet && (
         <button className="floating-button" type="button" onClick={() => setSheet('add')} aria-label="Add package">
           <PlusIcon />
         </button>
@@ -246,7 +247,7 @@ function CandidateList({
 function AddPackageSheet({ onClose, onAdded }: { onClose: () => void; onAdded: (pkg: TrackedPackage) => void }) {
   const [description, setDescription] = useState('')
   const [trackingNumber, setTrackingNumber] = useState('')
-  const [carrierCode, setCarrierCode] = useState('')
+  const [carrier, setCarrier] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -255,11 +256,10 @@ function AddPackageSheet({ onClose, onAdded }: { onClose: () => void; onAdded: (
     setSaving(true)
     setError('')
     try {
-      const parsedCarrier = carrierCode ? Number(carrierCode) : undefined
       const pkg = await addPackage({
         description: description.trim(),
         tracking_number: trackingNumber.trim(),
-        ...(parsedCarrier ? { carrier_code: parsedCarrier } : {}),
+        ...(carrier.trim() ? { carrier: carrier.trim() } : {}),
       })
       onAdded(pkg)
     } catch (requestError) {
@@ -281,8 +281,15 @@ function AddPackageSheet({ onClose, onAdded }: { onClose: () => void; onAdded: (
           <input required autoCapitalize="characters" value={trackingNumber} onChange={(event) => setTrackingNumber(event.target.value)} placeholder="1Z999AA10123456784" />
         </label>
         <label>
-          Carrier code <span className="optional">optional</span>
-          <input inputMode="numeric" pattern="[0-9]*" value={carrierCode} onChange={(event) => setCarrierCode(event.target.value)} placeholder="We’ll ask 17TRACK to detect it" />
+          Carrier <span className="optional">optional</span>
+          <input list="carrier-options" value={carrier} onChange={(event) => setCarrier(event.target.value)} placeholder="Auto-detect" />
+          <datalist id="carrier-options">
+            <option value="usps">USPS</option>
+            <option value="ups">UPS</option>
+            <option value="fedex">FedEx</option>
+            <option value="dhl_express">DHL Express</option>
+          </datalist>
+          <span className="field-help">Leave blank to detect common carriers, or enter a Shippo carrier token.</span>
         </label>
         {error && <p className="form-error" role="alert">{error}</p>}
         <button className="primary-button full-width" disabled={saving} type="submit">{saving ? 'Adding…' : 'Track package'}</button>
@@ -407,8 +414,9 @@ function SettingsSheet({
           </label>
         )}
         <label>
-          API token <span className="optional">if configured</span>
+          Nimotsu API token <span className="optional">if configured</span>
           <input type="password" value={apiToken} onChange={(event) => setAPIToken(event.target.value)} autoComplete="off" />
+          <span className="field-help">Matches NIMOTSU_API_TOKEN. Shippo credentials stay on the server.</span>
         </label>
         <button className="primary-button full-width" type="submit">Save connection</button>
       </form>

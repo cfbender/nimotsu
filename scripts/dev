@@ -2,6 +2,35 @@
 set -euo pipefail
 
 mise_bin="$HOME/.local/bin/mise"
+if [[ -f .env ]]; then
+  nimotsu_variables=(
+    NIMOTSU_API_TOKEN
+    NIMOTSU_SHIPPO_API_TOKEN
+    NIMOTSU_SHIPPO_WEBHOOK_TOKEN
+    NIMOTSU_FIREBASE_CREDENTIALS
+    NIMOTSU_GMAIL_CLIENT_ID
+    NIMOTSU_GMAIL_CLIENT_SECRET
+    NIMOTSU_PUBLIC_URL
+    NIMOTSU_ENCRYPTION_KEY
+    NIMOTSU_LISTEN
+    NIMOTSU_DATA_PATH
+    NIMOTSU_WEB_DIR
+  )
+  declare -A existing_environment=()
+  for variable in "${nimotsu_variables[@]}"; do
+    if [[ -v $variable ]]; then
+      existing_environment["$variable"]="${!variable}"
+    fi
+  done
+  set -a
+  # shellcheck disable=SC1091
+  source .env
+  set +a
+  for variable in "${!existing_environment[@]}"; do
+    export "$variable=${existing_environment[$variable]}"
+  done
+fi
+
 api_port="${NIMOTSU_DEV_API_PORT:-$(python3 - <<'PY'
 import socket
 with socket.socket() as listener:

@@ -12,11 +12,11 @@ The same Vite/React codebase is the browser UI and Capacitor Android UI. The And
 
 Capacitor's Android push plugin uses Firebase Cloud Messaging. Building an APK does not bypass Android's notification permission: Android 13 and newer require a runtime grant. Nimotsu requests it only after an explicit user action. iOS/APNs is out of scope for the first release.
 
-### 17TRACK webhooks, not polling
+### Provider-neutral tracking with Shippo webhooks
 
-Creating a package calls `POST /track/v2.4/register` and omits `carrier` by default, allowing 17TRACK to return its best carrier guess. Tracking changes arrive at `/api/webhooks/17track`. The handler verifies the documented SHA-256 signature over the exact request body and API key before updating SQLite.
+The API depends on a small tracking-provider contract for registration and webhook parsing; package storage and notifications contain no Shippo-specific types. The current provider registers tracking with `POST /tracks/`. Shippo requires a carrier, so Nimotsu makes a conservative local guess for common formats and asks the user for a Shippo carrier token when the number is ambiguous.
 
-17TRACK owns the carrier/status normalization. Nimotsu stores the provider's numeric carrier code and canonical status rather than maintaining a second carrier rules engine.
+Tracking changes arrive at `/api/webhooks/tracking`. Shippo's self-service webhook setup does not provide a signing secret, so the adapter authenticates a random token embedded in the configured webhook URL and converts `track_updated` events to provider-neutral updates. SQLite stores the carrier token and canonical package status. Repeated webhook deliveries are idempotent and do not send duplicate push notifications.
 
 ### Gmail OAuth with periodic sync
 
@@ -26,7 +26,7 @@ Gmail uses Google's web-server OAuth flow with `gmail.readonly`, offline access,
 - `users.watch` expires within seven days and must be renewed.
 - a five-minute inbox poll keeps the deployment at one container and is sufficient for shipment discovery.
 
-After linking, a worker queries likely shipping messages, extracts conservative tracking-number candidates, and puts them in a review queue. Message bodies are processed in memory but not persisted. It does not automatically register every number-like string because 17TRACK registration consumes quota and emails contain many false positives.
+After linking, a worker queries likely shipping messages, extracts conservative tracking-number candidates, and puts them in a review queue. Message bodies are processed in memory but not persisted. It does not automatically register every number-like string because external Shippo tracking can be billable and emails contain many false positives.
 
 The user flow remains one click after the instance administrator has supplied a Google OAuth client ID and secret. Self-hosting cannot eliminate that one-time Google Cloud configuration because each deployment needs an authorized redirect URI and a trusted OAuth client.
 
@@ -34,7 +34,7 @@ The user flow remains one click after the instance administrator has supplied a 
 
 ```diagram
 ┌───────────────┐  register   ┌──────────────┐
-│ Go + SQLite   │────────────▶│ 17TRACK API  │
+│ Go + SQLite   │────────────▶│  Shippo API  │
 │               │◀────────────│              │
 │               │  webhook    └──────────────┘
 │               │
@@ -47,7 +47,7 @@ The user flow remains one click after the instance administrator has supplied a 
 
 ## Delivery order
 
-1. **Tracking slice (implemented):** CRUD, 17TRACK registration/webhooks, Android shell, FCM.
+1. **Tracking slice (implemented):** CRUD, Shippo registration/webhooks behind a provider contract, Android shell, FCM.
 2. **Gmail discovery (implemented):** OAuth, encrypted token storage, polling worker, candidate review.
 3. **Notification durability:** SQLite outbox and dead-device cleanup; the current sender is best-effort after the webhook transaction commits.
 4. **Hardening:** first-run token setup, rate limits, backup/restore, release signing, and update delivery.

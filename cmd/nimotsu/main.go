@@ -16,8 +16,9 @@ import (
 	"github.com/cfbender/nimotsu/internal/config"
 	"github.com/cfbender/nimotsu/internal/gmail"
 	"github.com/cfbender/nimotsu/internal/push"
-	"github.com/cfbender/nimotsu/internal/seventeentrack"
+	"github.com/cfbender/nimotsu/internal/shippo"
 	"github.com/cfbender/nimotsu/internal/store"
+	"github.com/cfbender/nimotsu/internal/tracking"
 )
 
 func main() {
@@ -33,11 +34,20 @@ func main() {
 	}
 	defer dataStore.Close()
 
-	var trackingClient api.Tracker
-	if configuration.SeventeenTrackKey != "" {
-		trackingClient = seventeentrack.New(configuration.SeventeenTrackKey)
+	var trackingClient tracking.Provider
+	if configuration.ShippoAPIToken != "" {
+		trackingClient = shippo.New(configuration.ShippoAPIToken, configuration.ShippoWebhookToken)
+		if configuration.ShippoWebhookToken == "" {
+			logger.Warn("Shippo webhook authentication is not configured; registrations work but tracking updates are disabled")
+		}
+	} else if configuration.ShippoWebhookToken != "" {
+		logger.Error("Shippo configuration is incomplete; the API token is required when a webhook token is set")
+		os.Exit(1)
 	} else {
-		logger.Warn("17TRACK is not configured; packages will be saved without registration")
+		logger.Warn("Shippo is not configured; packages will be saved without registration")
+	}
+	if trackingClient != nil {
+		go reconcileTracking(appContext, dataStore, trackingClient, logger)
 	}
 
 	var pushSender *push.Sender
@@ -97,7 +107,7 @@ func main() {
 		}
 	}
 
-	apiHandler := api.New(dataStore, trackingClient, gmailService, configuration.APIToken, configuration.SeventeenTrackKey, onTrackingUpdate, logger)
+	apiHandler := api.New(dataStore, trackingClient, gmailService, configuration.APIToken, onTrackingUpdate, logger)
 	handler := withStaticFiles(apiHandler, configuration.WebDir)
 	server := &http.Server{
 		Addr:              configuration.Listen,
@@ -117,6 +127,49 @@ func main() {
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("serve", "error", err)
 		os.Exit(1)
+	}
+}
+
+func reconcileTracking(ctx context.Context, dataStore *store.Store, provider tracking.Provider, logger *slog.Logger) {
+	packages, err := dataStore.ListPackagesPendingRegistration(ctx, provider.Name())
+	if err != nil {
+		logger.Error("list packages pending tracking registration", "error", err)
+		return
+	}
+	for _, pkg := range packages {
+		if ctx.Err() != nil {
+			return
+		}
+		registration, err := provider.Register(ctx, pkg.TrackingNumber, pkg.Carrier)
+		if err != nil {
+			status := "RegistrationFailed"
+			if errors.Is(err, tracking.ErrCarrierRequired) {
+				status = "NeedsCarrier"
+			}
+			if updateErr := dataStore.SetRegistrationError(ctx, pkg.ID, pkg.Carrier, status, err.Error()); updateErr != nil {
+				logger.Error("save tracking registration error", "package_id", pkg.ID, "error", updateErr)
+			}
+			logger.Warn("tracking provider registration failed", "package_id", pkg.ID, "error", err)
+			continue
+		}
+		status := registration.Status
+		if status == "" {
+			status = "Registered"
+		}
+		carrier := pkg.Carrier
+		if registration.Carrier != "" {
+			carrier = registration.Carrier
+		}
+		if _, _, err := dataStore.UpdateTracking(ctx, pkg.TrackingNumber, carrier, store.TrackingUpdate{
+			Provider:      provider.Name(),
+			ProviderID:    registration.ProviderID,
+			Status:        status,
+			SubStatus:     registration.SubStatus,
+			LatestMessage: registration.LatestMessage,
+			LastEventAt:   registration.LastEventAt,
+		}); err != nil {
+			logger.Error("save reconciled tracking registration", "package_id", pkg.ID, "error", err)
+		}
 	}
 }
 

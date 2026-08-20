@@ -25,7 +25,9 @@ type Package struct {
 	ID                   string     `json:"id"`
 	Description          string     `json:"description"`
 	TrackingNumber       string     `json:"tracking_number"`
-	CarrierCode          *int64     `json:"carrier_code"`
+	Carrier              string     `json:"carrier"`
+	TrackingProvider     string     `json:"-"`
+	TrackingProviderID   string     `json:"-"`
 	Status               string     `json:"status"`
 	SubStatus            string     `json:"sub_status"`
 	LatestMessage        string     `json:"latest_message"`
@@ -38,14 +40,21 @@ type Package struct {
 }
 
 type NewPackage struct {
-	Description    string
-	TrackingNumber string
-	CarrierCode    *int64
-	Status         string
-	TrackingError  string
+	Description        string
+	TrackingNumber     string
+	Carrier            string
+	TrackingProvider   string
+	TrackingProviderID string
+	Status             string
+	SubStatus          string
+	LatestMessage      string
+	LastEventAt        *time.Time
+	TrackingError      string
 }
 
 type TrackingUpdate struct {
+	Provider      string
+	ProviderID    string
 	Status        string
 	SubStatus     string
 	LatestMessage string
@@ -72,7 +81,7 @@ type EmailCandidate struct {
 }
 
 const packageColumns = `
-	id, description, tracking_number, carrier_code, status, sub_status,
+	id, description, tracking_number, carrier, tracking_provider, tracking_provider_id, status, sub_status,
 	latest_message, last_event_at, tracking_error, notifications_enabled,
 	archived, created_at, updated_at`
 
@@ -112,7 +121,9 @@ CREATE TABLE IF NOT EXISTS packages (
     id TEXT PRIMARY KEY,
     description TEXT NOT NULL,
     tracking_number TEXT NOT NULL UNIQUE,
-    carrier_code INTEGER,
+    carrier TEXT NOT NULL DEFAULT '',
+    tracking_provider TEXT NOT NULL DEFAULT '',
+    tracking_provider_id TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL,
     sub_status TEXT NOT NULL DEFAULT '',
     latest_message TEXT NOT NULL DEFAULT '',
@@ -168,6 +179,43 @@ CREATE TABLE IF NOT EXISTS email_candidates (
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("migrate sqlite: %w", err)
 	}
+	if err := s.ensurePackageTrackingColumns(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Store) ensurePackageTrackingColumns(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(packages)`)
+	if err != nil {
+		return fmt.Errorf("inspect packages schema: %w", err)
+	}
+	defer rows.Close()
+	columns := make(map[string]bool)
+	for rows.Next() {
+		var columnID, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&columnID, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return fmt.Errorf("scan packages schema: %w", err)
+		}
+		columns[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("inspect packages schema: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close packages schema inspection: %w", err)
+	}
+	for _, column := range []string{"carrier", "tracking_provider", "tracking_provider_id"} {
+		if columns[column] {
+			continue
+		}
+		if _, err := s.db.ExecContext(ctx, `ALTER TABLE packages ADD COLUMN `+column+` TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("add package %s: %w", column, err)
+		}
+	}
 	return nil
 }
 
@@ -197,28 +245,76 @@ FROM packages WHERE archived = 0 ORDER BY updated_at DESC, created_at DESC`)
 	return packages, nil
 }
 
+func (s *Store) ListPackagesPendingRegistration(ctx context.Context, provider string) ([]Package, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+packageColumns+`
+FROM packages
+WHERE archived = 0
+  AND tracking_provider <> ?
+  AND status NOT IN ('Delivered', 'Expired', 'Cancelled', 'Canceled')
+ORDER BY created_at`, provider)
+	if err != nil {
+		return nil, fmt.Errorf("list packages pending registration: %w", err)
+	}
+	defer rows.Close()
+
+	packages := make([]Package, 0)
+	for rows.Next() {
+		pkg, err := scanPackage(rows)
+		if err != nil {
+			return nil, err
+		}
+		packages = append(packages, pkg)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list packages pending registration: %w", err)
+	}
+	return packages, nil
+}
+
 func (s *Store) CreatePackage(ctx context.Context, input NewPackage) (Package, error) {
 	now := time.Now().UTC().Truncate(time.Second)
 	pkg := Package{
 		ID:                   newID(),
 		Description:          input.Description,
 		TrackingNumber:       input.TrackingNumber,
-		CarrierCode:          input.CarrierCode,
+		Carrier:              input.Carrier,
+		TrackingProvider:     input.TrackingProvider,
+		TrackingProviderID:   input.TrackingProviderID,
 		Status:               input.Status,
+		SubStatus:            input.SubStatus,
+		LatestMessage:        input.LatestMessage,
+		LastEventAt:          input.LastEventAt,
 		TrackingError:        input.TrackingError,
 		NotificationsEnabled: true,
 		CreatedAt:            now,
 		UpdatedAt:            now,
 	}
 
+	var lastEventUnix any
+	if pkg.LastEventAt != nil {
+		lastEventUnix = pkg.LastEventAt.UTC().Unix()
+	}
 	result, err := s.db.ExecContext(ctx, `
 INSERT INTO packages (
-    id, description, tracking_number, carrier_code, status, tracking_error,
-    notifications_enabled, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
-ON CONFLICT(tracking_number) DO NOTHING`,
-		pkg.ID, pkg.Description, pkg.TrackingNumber, pkg.CarrierCode, pkg.Status,
-		pkg.TrackingError, now.Unix(), now.Unix(),
+    id, description, tracking_number, carrier, tracking_provider, tracking_provider_id, status, sub_status,
+    latest_message, last_event_at, tracking_error, notifications_enabled, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+ON CONFLICT(tracking_number) DO UPDATE SET
+    description = excluded.description,
+    carrier = excluded.carrier,
+    tracking_provider = excluded.tracking_provider,
+    tracking_provider_id = excluded.tracking_provider_id,
+    status = excluded.status,
+    sub_status = excluded.sub_status,
+    latest_message = excluded.latest_message,
+    last_event_at = excluded.last_event_at,
+    tracking_error = excluded.tracking_error,
+    notifications_enabled = 1,
+    archived = 0,
+    updated_at = excluded.updated_at
+WHERE packages.archived = 1`,
+		pkg.ID, pkg.Description, pkg.TrackingNumber, pkg.Carrier, pkg.TrackingProvider, pkg.TrackingProviderID, pkg.Status, pkg.SubStatus,
+		pkg.LatestMessage, lastEventUnix, pkg.TrackingError, now.Unix(), now.Unix(),
 	)
 	if err != nil {
 		return Package{}, fmt.Errorf("create package: %w", err)
@@ -230,7 +326,11 @@ ON CONFLICT(tracking_number) DO NOTHING`,
 	if rows == 0 {
 		return Package{}, ErrDuplicate
 	}
-	return pkg, nil
+	created, err := scanPackage(s.db.QueryRowContext(ctx, `SELECT `+packageColumns+` FROM packages WHERE tracking_number = ?`, input.TrackingNumber))
+	if err != nil {
+		return Package{}, fmt.Errorf("read created package: %w", err)
+	}
+	return created, nil
 }
 
 func (s *Store) SetNotifications(ctx context.Context, id string, enabled bool) (Package, error) {
@@ -259,41 +359,70 @@ func (s *Store) ArchivePackage(ctx context.Context, id string) error {
 	return nil
 }
 
-func (s *Store) UpdateTracking(ctx context.Context, trackingNumber string, carrierCode int64, update TrackingUpdate) (Package, bool, error) {
+func (s *Store) SetRegistrationError(ctx context.Context, id, carrier, status, trackingError string) error {
+	result, err := s.db.ExecContext(ctx, `
+UPDATE packages SET carrier = ?, tracking_provider = '', tracking_provider_id = '', status = ?, sub_status = '', latest_message = '',
+    last_event_at = NULL, tracking_error = ?, updated_at = ?
+WHERE id = ? AND archived = 0`, carrier, status, trackingError, time.Now().UTC().Unix(), id)
+	if err != nil {
+		return fmt.Errorf("set package registration error: %w", err)
+	}
+	if rows, _ := result.RowsAffected(); rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) UpdateTracking(ctx context.Context, trackingNumber, carrier string, update TrackingUpdate) (Package, bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Package{}, false, fmt.Errorf("begin tracking update: %w", err)
 	}
 	defer tx.Rollback()
 
-	pkg, err := scanPackage(tx.QueryRowContext(ctx, `SELECT `+packageColumns+` FROM packages WHERE tracking_number = ?`, trackingNumber))
+	pkg, err := scanPackage(tx.QueryRowContext(ctx, `SELECT `+packageColumns+` FROM packages WHERE tracking_number = ? AND archived = 0`, trackingNumber))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Package{}, false, sql.ErrNoRows
 		}
 		return Package{}, false, err
 	}
+	if update.Provider == "" && pkg.LastEventAt != nil && update.LastEventAt != nil && update.LastEventAt.Before(*pkg.LastEventAt) {
+		return pkg, false, nil
+	}
 
-	changed := pkg.Status != update.Status || pkg.SubStatus != update.SubStatus || pkg.LatestMessage != update.LatestMessage
+	eventChanged := false
+	if update.LastEventAt != nil {
+		eventChanged = pkg.LastEventAt == nil || !pkg.LastEventAt.Equal(*update.LastEventAt)
+	} else if update.Provider != "" {
+		eventChanged = pkg.LastEventAt != nil
+	}
+	changed := pkg.Status != update.Status || pkg.SubStatus != update.SubStatus || pkg.LatestMessage != update.LatestMessage || eventChanged
 	now := time.Now().UTC().Truncate(time.Second)
-	if carrierCode != 0 {
-		pkg.CarrierCode = &carrierCode
+	if carrier != "" {
+		pkg.Carrier = carrier
+	}
+	if update.Provider != "" {
+		pkg.TrackingProvider = update.Provider
+		pkg.TrackingProviderID = update.ProviderID
 	}
 	pkg.Status = update.Status
 	pkg.SubStatus = update.SubStatus
 	pkg.LatestMessage = update.LatestMessage
-	pkg.LastEventAt = update.LastEventAt
+	if update.LastEventAt != nil || update.Provider != "" {
+		pkg.LastEventAt = update.LastEventAt
+	}
 	pkg.TrackingError = ""
 	pkg.UpdatedAt = now
 
 	var eventUnix any
-	if update.LastEventAt != nil {
-		eventUnix = update.LastEventAt.Unix()
+	if pkg.LastEventAt != nil {
+		eventUnix = pkg.LastEventAt.Unix()
 	}
 	if _, err := tx.ExecContext(ctx, `
-UPDATE packages SET carrier_code = ?, status = ?, sub_status = ?, latest_message = ?,
+UPDATE packages SET carrier = ?, tracking_provider = ?, tracking_provider_id = ?, status = ?, sub_status = ?, latest_message = ?,
     last_event_at = ?, tracking_error = '', updated_at = ? WHERE id = ?`,
-		pkg.CarrierCode, pkg.Status, pkg.SubStatus, pkg.LatestMessage, eventUnix, now.Unix(), pkg.ID,
+		pkg.Carrier, pkg.TrackingProvider, pkg.TrackingProviderID, pkg.Status, pkg.SubStatus, pkg.LatestMessage, eventUnix, now.Unix(), pkg.ID,
 	); err != nil {
 		return Package{}, false, fmt.Errorf("update tracking: %w", err)
 	}
@@ -553,18 +682,15 @@ type scanner interface {
 
 func scanPackage(row scanner) (Package, error) {
 	var pkg Package
-	var carrier, lastEvent sql.NullInt64
+	var lastEvent sql.NullInt64
 	var notifications, archived int
 	var created, updated int64
 	if err := row.Scan(
-		&pkg.ID, &pkg.Description, &pkg.TrackingNumber, &carrier, &pkg.Status,
+		&pkg.ID, &pkg.Description, &pkg.TrackingNumber, &pkg.Carrier, &pkg.TrackingProvider, &pkg.TrackingProviderID, &pkg.Status,
 		&pkg.SubStatus, &pkg.LatestMessage, &lastEvent, &pkg.TrackingError,
 		&notifications, &archived, &created, &updated,
 	); err != nil {
 		return Package{}, err
-	}
-	if carrier.Valid {
-		pkg.CarrierCode = &carrier.Int64
 	}
 	if lastEvent.Valid {
 		value := time.Unix(lastEvent.Int64, 0).UTC()

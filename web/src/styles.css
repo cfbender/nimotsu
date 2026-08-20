@@ -91,7 +91,7 @@ h1 { margin-bottom: 0; font-family: ui-rounded, "Arial Rounded MT Bold", system-
 .package-card-main { display: flex; gap: 15px; padding: 20px; }
 .status-mark { display: grid; flex: 0 0 46px; height: 46px; place-items: center; color: var(--green); border-radius: 14px; background: var(--green-soft); }
 .status-delivered .status-mark { color: var(--on-green); background: var(--green); }
-.status-exception .status-mark, .status-deliveryfailure .status-mark, .status-registrationfailed .status-mark { color: var(--red); background: var(--red-soft); }
+.status-exception .status-mark, .status-error .status-mark, .status-failure .status-mark, .status-deliveryfailure .status-mark, .status-registrationfailed .status-mark { color: var(--red); background: var(--red-soft); }
 .package-copy { min-width: 0; flex: 1; }
 .package-heading { display: flex; align-items: flex-start; gap: 10px; justify-content: space-between; }
 .package-heading h2 { display: -webkit-box; overflow: hidden; margin: 2px 0 8px; font-family: ui-rounded, "Arial Rounded MT Bold", system-ui, sans-serif; font-size: 1.05rem; line-height: 1.25; letter-spacing: -.025em; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
@@ -128,6 +128,7 @@ h1 { margin-bottom: 0; font-family: ui-rounded, "Arial Rounded MT Bold", system-
 form { display: grid; gap: 17px; }
 label { display: grid; gap: 8px; color: var(--ink); font-size: .8rem; font-weight: 700; }
 .optional { margin-left: 5px; color: var(--subtle); font-weight: 500; }
+.field-help { margin-top: -3px; color: var(--muted); font-size: .7rem; font-weight: 400; }
 input { width: 100%; height: 50px; padding: 0 14px; color: var(--ink); border: 1px solid var(--line); border-radius: 13px; outline: 0; background: var(--page); font-size: .95rem; }
 input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px var(--blue-ring); }
 input::placeholder { color: var(--subtle); }

@@ -7,7 +7,8 @@ type Config struct {
 	DataPath            string
 	WebDir              string
 	APIToken            string
-	SeventeenTrackKey   string
+	ShippoAPIToken      string
+	ShippoWebhookToken  string
 	FirebaseCredentials string
 	GmailClientID       string
 	GmailClientSecret   string
@@ -21,7 +22,8 @@ func Load() Config {
 		DataPath:            value("NIMOTSU_DATA_PATH", "./data/nimotsu.db"),
 		WebDir:              value("NIMOTSU_WEB_DIR", "./web/dist"),
 		APIToken:            os.Getenv("NIMOTSU_API_TOKEN"),
-		SeventeenTrackKey:   os.Getenv("NIMOTSU_17TRACK_KEY"),
+		ShippoAPIToken:      os.Getenv("NIMOTSU_SHIPPO_API_TOKEN"),
+		ShippoWebhookToken:  os.Getenv("NIMOTSU_SHIPPO_WEBHOOK_TOKEN"),
 		FirebaseCredentials: os.Getenv("NIMOTSU_FIREBASE_CREDENTIALS"),
 		GmailClientID:       os.Getenv("NIMOTSU_GMAIL_CLIENT_ID"),
 		GmailClientSecret:   os.Getenv("NIMOTSU_GMAIL_CLIENT_SECRET"),

@@ -2,10 +2,8 @@ package api
 
 import (
 	"context"
-	"crypto/sha256"
 	"crypto/subtle"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,35 +15,29 @@ import (
 	"time"
 
 	"github.com/cfbender/nimotsu/internal/gmail"
-	"github.com/cfbender/nimotsu/internal/seventeentrack"
 	"github.com/cfbender/nimotsu/internal/store"
+	"github.com/cfbender/nimotsu/internal/tracking"
 )
 
-var trackingNumberPattern = regexp.MustCompile(`^[A-Z0-9-]{5,50}$`)
-
-type Tracker interface {
-	Register(ctx context.Context, number string, carrierCode *int64) (seventeentrack.Registration, error)
-}
+var trackingNumberPattern = regexp.MustCompile(`^[A-Z0-9_-]{5,50}$`)
 
 type Server struct {
-	store             *store.Store
-	tracker           Tracker
-	gmail             *gmail.Service
-	apiToken          string
-	seventeenTrackKey string
-	onTrackingUpdate  func(store.Package)
-	logger            *slog.Logger
+	store            *store.Store
+	tracker          tracking.Provider
+	gmail            *gmail.Service
+	apiToken         string
+	onTrackingUpdate func(store.Package)
+	logger           *slog.Logger
 }
 
-func New(dataStore *store.Store, trackerClient Tracker, gmailService *gmail.Service, apiToken, seventeenTrackKey string, onTrackingUpdate func(store.Package), logger *slog.Logger) http.Handler {
+func New(dataStore *store.Store, trackerClient tracking.Provider, gmailService *gmail.Service, apiToken string, onTrackingUpdate func(store.Package), logger *slog.Logger) http.Handler {
 	server := &Server{
-		store:             dataStore,
-		tracker:           trackerClient,
-		gmail:             gmailService,
-		apiToken:          apiToken,
-		seventeenTrackKey: seventeenTrackKey,
-		onTrackingUpdate:  onTrackingUpdate,
-		logger:            logger,
+		store:            dataStore,
+		tracker:          trackerClient,
+		gmail:            gmailService,
+		apiToken:         apiToken,
+		onTrackingUpdate: onTrackingUpdate,
+		logger:           logger,
 	}
 
 	mux := http.NewServeMux()
@@ -63,7 +55,7 @@ func New(dataStore *store.Store, trackerClient Tracker, gmailService *gmail.Serv
 	mux.Handle("GET /api/gmail/candidates", server.authorize(http.HandlerFunc(server.listEmailCandidates)))
 	mux.Handle("POST /api/gmail/candidates/{id}/accept", server.authorize(http.HandlerFunc(server.acceptEmailCandidate)))
 	mux.Handle("DELETE /api/gmail/candidates/{id}", server.authorize(http.HandlerFunc(server.dismissEmailCandidate)))
-	mux.HandleFunc("POST /api/webhooks/17track", server.seventeenTrackWebhook)
+	mux.HandleFunc("POST /api/webhooks/tracking", server.trackingWebhook)
 
 	return cors(mux)
 }
@@ -85,27 +77,28 @@ func (s *Server) createPackage(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		Description    string `json:"description"`
 		TrackingNumber string `json:"tracking_number"`
-		CarrierCode    *int64 `json:"carrier_code"`
+		Carrier        string `json:"carrier"`
 	}
 	if err := readJSON(w, r, &request); err != nil {
 		return
 	}
 	request.Description = strings.TrimSpace(request.Description)
 	request.TrackingNumber = strings.ToUpper(strings.TrimSpace(request.TrackingNumber))
+	request.Carrier = strings.TrimSpace(request.Carrier)
 	if request.Description == "" {
 		writeError(w, http.StatusBadRequest, "description is required")
 		return
 	}
 	if !trackingNumberPattern.MatchString(request.TrackingNumber) {
-		writeError(w, http.StatusBadRequest, "tracking number must be 5-50 letters, numbers, or hyphens")
+		writeError(w, http.StatusBadRequest, "tracking number must be 5-50 letters, numbers, hyphens, or underscores")
 		return
 	}
-	if request.CarrierCode != nil && *request.CarrierCode <= 0 {
-		writeError(w, http.StatusBadRequest, "carrier code must be a positive number")
+	if len(request.Carrier) > 100 {
+		writeError(w, http.StatusBadRequest, "carrier must be 100 characters or fewer")
 		return
 	}
 
-	pkg, err := s.savePackage(r.Context(), request.Description, request.TrackingNumber, request.CarrierCode)
+	pkg, err := s.savePackage(r.Context(), request.Description, request.TrackingNumber, request.Carrier)
 	if errors.Is(err, store.ErrDuplicate) {
 		writeError(w, http.StatusConflict, "that tracking number is already saved")
 		return
@@ -117,35 +110,46 @@ func (s *Server) createPackage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, pkg)
 }
 
-func (s *Server) savePackage(ctx context.Context, description, trackingNumber string, requestedCarrier *int64) (store.Package, error) {
+func (s *Server) savePackage(ctx context.Context, description, trackingNumber, requestedCarrier string) (store.Package, error) {
 	status := "Unregistered"
-	trackingError := "17TRACK is not configured"
-	carrierCode := requestedCarrier
+	trackingError := "Shippo is not configured"
+	carrier := requestedCarrier
+	providerName := ""
+	var registration tracking.Registration
 	if s.tracker != nil {
-		registration, err := s.tracker.Register(ctx, trackingNumber, requestedCarrier)
+		var err error
+		registration, err = s.tracker.Register(ctx, trackingNumber, requestedCarrier)
 		switch {
 		case err == nil:
-			status = "Registered"
+			providerName = s.tracker.Name()
+			status = registration.Status
+			if status == "" {
+				status = "Registered"
+			}
 			trackingError = ""
-			carrierCode = &registration.CarrierCode
-		case is17TrackCode(err, -18019901):
-			status = "Registered"
-			trackingError = ""
-		case is17TrackCode(err, -18019903):
+			if registration.Carrier != "" {
+				carrier = registration.Carrier
+			}
+		case errors.Is(err, tracking.ErrCarrierRequired):
 			status = "NeedsCarrier"
 			trackingError = err.Error()
 		default:
 			status = "RegistrationFailed"
 			trackingError = err.Error()
-			s.logger.Warn("17TRACK registration failed", "tracking_number", trackingNumber, "error", err)
+			s.logger.Warn("tracking provider registration failed", "tracking_number", trackingNumber, "error", err)
 		}
 	}
 	return s.store.CreatePackage(ctx, store.NewPackage{
-		Description:    description,
-		TrackingNumber: trackingNumber,
-		CarrierCode:    carrierCode,
-		Status:         status,
-		TrackingError:  trackingError,
+		Description:        description,
+		TrackingNumber:     trackingNumber,
+		Carrier:            carrier,
+		TrackingProvider:   providerName,
+		TrackingProviderID: registration.ProviderID,
+		Status:             status,
+		SubStatus:          registration.SubStatus,
+		LatestMessage:      registration.LatestMessage,
+		LastEventAt:        registration.LastEventAt,
+		TrackingError:      trackingError,
 	})
 }
 
@@ -320,7 +324,7 @@ func (s *Server) acceptEmailCandidate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "email suggestion has an invalid tracking number")
 		return
 	}
-	pkg, err := s.savePackage(r.Context(), candidate.Description, candidate.TrackingNumber, nil)
+	pkg, err := s.savePackage(r.Context(), candidate.Description, candidate.TrackingNumber, "")
 	if errors.Is(err, store.ErrDuplicate) {
 		writeError(w, http.StatusConflict, "that tracking number is already saved")
 		return
@@ -349,9 +353,9 @@ func (s *Server) dismissEmailCandidate(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) seventeenTrackWebhook(w http.ResponseWriter, r *http.Request) {
-	if s.seventeenTrackKey == "" {
-		writeError(w, http.StatusServiceUnavailable, "17TRACK is not configured")
+func (s *Server) trackingWebhook(w http.ResponseWriter, r *http.Request) {
+	if s.tracker == nil {
+		writeError(w, http.StatusServiceUnavailable, "tracking provider is not configured")
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 2<<20))
@@ -359,45 +363,37 @@ func (s *Server) seventeenTrackWebhook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid webhook body")
 		return
 	}
-	if !valid17TrackSignature(body, s.seventeenTrackKey, r.Header.Get("sign")) {
-		writeError(w, http.StatusUnauthorized, "invalid webhook signature")
+	update, err := s.tracker.ParseWebhook(r, body)
+	switch {
+	case errors.Is(err, tracking.ErrIgnoredWebhook):
+		w.WriteHeader(http.StatusOK)
+		return
+	case errors.Is(err, tracking.ErrWebhookNotConfigured):
+		writeError(w, http.StatusServiceUnavailable, "tracking webhooks are not configured")
+		return
+	case errors.Is(err, tracking.ErrWebhookAuthentication):
+		writeError(w, http.StatusUnauthorized, "invalid webhook authentication")
+		return
+	case errors.Is(err, tracking.ErrInvalidWebhook):
+		writeError(w, http.StatusBadRequest, "invalid tracking webhook")
+		return
+	case err != nil:
+		s.internalError(w, "parse tracking webhook", err)
 		return
 	}
-
-	var webhook trackingWebhook
-	if err := json.Unmarshal(body, &webhook); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid webhook JSON")
-		return
-	}
-	if webhook.Event != "TRACKING_UPDATED" || webhook.Data.Number == "" {
-		writeError(w, http.StatusBadRequest, "unsupported webhook event")
-		return
-	}
-
-	message := webhook.Data.TrackInfo.LatestEvent.Description
-	if translated := webhook.Data.TrackInfo.LatestEvent.DescriptionTranslation.Description; translated != "" {
-		message = translated
-	}
-	var eventAt *time.Time
-	if raw := webhook.Data.TrackInfo.LatestEvent.TimeUTC; raw != "" {
-		parsed, err := time.Parse(time.RFC3339, raw)
-		if err == nil {
-			eventAt = &parsed
-		}
-	}
-	pkg, changed, err := s.store.UpdateTracking(r.Context(), strings.ToUpper(webhook.Data.Number), webhook.Data.Carrier, store.TrackingUpdate{
-		Status:        webhook.Data.TrackInfo.LatestStatus.Status,
-		SubStatus:     webhook.Data.TrackInfo.LatestStatus.SubStatus,
-		LatestMessage: message,
-		LastEventAt:   eventAt,
+	pkg, changed, err := s.store.UpdateTracking(r.Context(), update.TrackingNumber, update.Carrier, store.TrackingUpdate{
+		Status:        update.Status,
+		SubStatus:     update.SubStatus,
+		LatestMessage: update.LatestMessage,
+		LastEventAt:   update.LastEventAt,
 	})
 	if errors.Is(err, sql.ErrNoRows) {
-		// The 17TRACK account may contain registrations not owned by this instance.
+		// The provider account may contain trackers not owned by this instance.
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 	if err != nil {
-		s.internalError(w, "process 17TRACK webhook", err)
+		s.internalError(w, "process tracking webhook", err)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -424,40 +420,6 @@ func (s *Server) authorize(next http.Handler) http.Handler {
 func (s *Server) internalError(w http.ResponseWriter, operation string, err error) {
 	s.logger.Error(operation, "error", err)
 	writeError(w, http.StatusInternalServerError, "internal server error")
-}
-
-type trackingWebhook struct {
-	Event string `json:"event"`
-	Data  struct {
-		Number    string `json:"number"`
-		Carrier   int64  `json:"carrier"`
-		TrackInfo struct {
-			LatestStatus struct {
-				Status    string `json:"status"`
-				SubStatus string `json:"sub_status"`
-			} `json:"latest_status"`
-			LatestEvent struct {
-				TimeUTC                string `json:"time_utc"`
-				Description            string `json:"description"`
-				DescriptionTranslation struct {
-					Description string `json:"description"`
-				} `json:"description_translation"`
-			} `json:"latest_event"`
-		} `json:"track_info"`
-	} `json:"data"`
-}
-
-func valid17TrackSignature(body []byte, key, provided string) bool {
-	hash := sha256.Sum256(append(append(append([]byte(nil), body...), '/'), key...))
-	expected := make([]byte, hex.EncodedLen(len(hash)))
-	hex.Encode(expected, hash[:])
-	provided = strings.ToLower(strings.TrimSpace(provided))
-	return len(provided) == len(expected) && subtle.ConstantTimeCompare([]byte(provided), expected) == 1
-}
-
-func is17TrackCode(err error, code int) bool {
-	var apiError *seventeentrack.APIError
-	return errors.As(err, &apiError) && apiError.Code == code
 }
 
 func readJSON(w http.ResponseWriter, r *http.Request, value any) error {
