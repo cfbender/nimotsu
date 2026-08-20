@@ -80,15 +80,53 @@ func TestCreatePackageWithoutConfiguredTracker(t *testing.T) {
 	}
 }
 
+func TestRenamePackage(t *testing.T) {
+	dataStore := openTestStore(t)
+	handler := New(dataStore, nil, nil, "", nil, testLogger())
+	created := postJSON(handler, "/api/packages", `{"description":"Headphones","tracking_number":"1Z999AA10123456784"}`)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, body = %s", created.Code, created.Body.String())
+	}
+	var pkg store.Package
+	if err := json.Unmarshal(created.Body.Bytes(), &pkg); err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodPatch, "/api/packages/"+pkg.ID, bytes.NewBufferString(`{"description":"  Studio headphones  "}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("rename status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var renamed store.Package
+	if err := json.Unmarshal(response.Body.Bytes(), &renamed); err != nil {
+		t.Fatal(err)
+	}
+	if renamed.Description != "Studio headphones" {
+		t.Fatalf("renamed package = %+v", renamed)
+	}
+
+	emptyRequest := httptest.NewRequest(http.MethodPatch, "/api/packages/"+pkg.ID, bytes.NewBufferString(`{"description":"  "}`))
+	emptyRequest.Header.Set("Content-Type", "application/json")
+	emptyResponse := httptest.NewRecorder()
+	handler.ServeHTTP(emptyResponse, emptyRequest)
+	if emptyResponse.Code != http.StatusBadRequest {
+		t.Fatalf("empty rename status = %d, body = %s", emptyResponse.Code, emptyResponse.Body.String())
+	}
+}
+
 func TestCreateAndRestorePackageRegistersWithProvider(t *testing.T) {
 	dataStore := openTestStore(t)
+	estimatedDeliveryAt := time.Date(2026, 8, 23, 0, 0, 0, 0, time.UTC)
 	provider := &fakeProvider{registration: tracking.Registration{
 		ProviderID: "trk_123",
 		Update: tracking.Update{
-			Carrier:       "USPS",
-			Status:        "PreTransit",
-			SubStatus:     "LabelCreated",
-			LatestMessage: "Shipping label created",
+			Carrier:             "USPS",
+			Status:              "PreTransit",
+			SubStatus:           "LabelCreated",
+			LatestMessage:       "Shipping label created",
+			EstimatedDeliveryAt: &estimatedDeliveryAt,
 		},
 	}}
 	handler := New(dataStore, provider, nil, "", nil, testLogger())
@@ -104,7 +142,7 @@ func TestCreateAndRestorePackageRegistersWithProvider(t *testing.T) {
 	if err := json.Unmarshal(created.Body.Bytes(), &original); err != nil {
 		t.Fatal(err)
 	}
-	if original.Carrier != "USPS" || original.Status != "PreTransit" || original.LatestMessage != "Shipping label created" {
+	if original.Carrier != "USPS" || original.Status != "PreTransit" || original.LatestMessage != "Shipping label created" || original.EstimatedDeliveryAt == nil || !original.EstimatedDeliveryAt.Equal(estimatedDeliveryAt) {
 		t.Fatalf("created package = %+v", original)
 	}
 	packages, err := dataStore.ListPackages(t.Context())

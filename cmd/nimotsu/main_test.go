@@ -39,13 +39,15 @@ func (p *reconciliationProvider) Lookup(_ context.Context, number, _ string) (tr
 func reconciliationRegistration(number string) tracking.Registration {
 	eventAt := time.Date(2026, time.August, 20, 12, 0, 0, 0, time.UTC)
 	historyAt := eventAt.Add(-time.Hour)
+	estimatedDeliveryAt := eventAt.Add(72 * time.Hour)
 	return tracking.Registration{ProviderID: "trk_123", Update: tracking.Update{
-		TrackingNumber: number,
-		Carrier:        "USPS",
-		Status:         "InTransit",
-		LatestMessage:  "Moving through network",
-		Location:       "Los Angeles, CA 90001, US",
-		LastEventAt:    &eventAt,
+		TrackingNumber:      number,
+		Carrier:             "USPS",
+		Status:              "InTransit",
+		LatestMessage:       "Moving through network",
+		Location:            "Los Angeles, CA 90001, US",
+		EstimatedDeliveryAt: &estimatedDeliveryAt,
+		LastEventAt:         &eventAt,
 	}, History: []tracking.Update{{Status: "PreTransit", LatestMessage: "Label created", Location: "Phoenix, AZ 85001, US", LastEventAt: &historyAt}}}
 }
 
@@ -76,7 +78,7 @@ func TestReconcileTrackingRegistersExistingFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(packages) != 1 || packages[0].Status != "InTransit" || packages[0].Carrier != "USPS" || packages[0].LatestLocation != "Los Angeles, CA 90001, US" || packages[0].TrackingProvider != "test-provider" || packages[0].TrackingProviderID != "trk_123" || packages[0].TrackingError != "" || provider.registerCalls != 1 || provider.lookupCalls != 1 {
+	if len(packages) != 1 || packages[0].Status != "InTransit" || packages[0].Carrier != "USPS" || packages[0].LatestLocation != "Los Angeles, CA 90001, US" || packages[0].EstimatedDeliveryAt == nil || packages[0].TrackingProvider != "test-provider" || packages[0].TrackingProviderID != "trk_123" || packages[0].TrackingError != "" || provider.registerCalls != 1 || provider.lookupCalls != 1 {
 		t.Fatalf("reconciled packages = %+v", packages)
 	}
 	events, err := dataStore.ListTrackingEvents(t.Context(), packages[0].ID)

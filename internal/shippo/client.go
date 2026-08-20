@@ -263,6 +263,7 @@ func errorMessage(value any) string {
 type trackPayload struct {
 	Carrier         string           `json:"carrier"`
 	TrackingNumber  string           `json:"tracking_number"`
+	ETA             string           `json:"eta"`
 	TrackingStatus  *trackingStatus  `json:"tracking_status"`
 	TrackingHistory []trackingStatus `json:"tracking_history"`
 }
@@ -308,6 +309,9 @@ func (t trackPayload) updateFrom(latest *trackingStatus) tracking.Update {
 		TrackingNumber: strings.ToUpper(t.TrackingNumber),
 		Carrier:        normalizeCarrier(t.Carrier),
 		Status:         "Unknown",
+	}
+	if estimatedDeliveryAt, ok := parseTime(t.ETA); ok {
+		update.EstimatedDeliveryAt = &estimatedDeliveryAt
 	}
 	if latest == nil {
 		return update

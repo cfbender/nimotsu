@@ -172,13 +172,14 @@ func reconcileTracking(ctx context.Context, dataStore *store.Store, provider tra
 			carrier = registration.Carrier
 		}
 		updated, _, err := dataStore.UpdateTracking(ctx, pkg.TrackingNumber, carrier, store.TrackingUpdate{
-			Provider:      provider.Name(),
-			ProviderID:    registration.ProviderID,
-			Status:        status,
-			SubStatus:     registration.SubStatus,
-			LatestMessage: registration.LatestMessage,
-			Location:      registration.Location,
-			LastEventAt:   registration.LastEventAt,
+			Provider:            provider.Name(),
+			ProviderID:          registration.ProviderID,
+			Status:              status,
+			SubStatus:           registration.SubStatus,
+			LatestMessage:       registration.LatestMessage,
+			Location:            registration.Location,
+			EstimatedDeliveryAt: registration.EstimatedDeliveryAt,
+			LastEventAt:         registration.LastEventAt,
 		})
 		if err != nil {
 			logger.Error("save reconciled tracking registration", "package_id", pkg.ID, "error", err)

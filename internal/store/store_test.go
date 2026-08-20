@@ -30,25 +30,28 @@ func TestPackageLifecycle(t *testing.T) {
 	}
 
 	eventAt := time.Date(2026, time.August, 20, 12, 0, 0, 0, time.UTC)
+	estimatedDeliveryAt := time.Date(2026, time.August, 23, 0, 0, 0, 0, time.UTC)
 	updated, changed, err := dataStore.UpdateTracking(ctx, pkg.TrackingNumber, "UPS", TrackingUpdate{
-		Status:        "InTransit",
-		SubStatus:     "InTransit_Other",
-		LatestMessage: "Departed facility",
-		LastEventAt:   &eventAt,
+		Status:              "InTransit",
+		SubStatus:           "InTransit_Other",
+		LatestMessage:       "Departed facility",
+		EstimatedDeliveryAt: &estimatedDeliveryAt,
+		LastEventAt:         &eventAt,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !changed || updated.Status != "InTransit" || updated.Carrier != "UPS" {
+	if !changed || updated.Status != "InTransit" || updated.Carrier != "UPS" || updated.EstimatedDeliveryAt == nil || !updated.EstimatedDeliveryAt.Equal(estimatedDeliveryAt) {
 		t.Fatalf("unexpected update: changed=%v package=%+v", changed, updated)
 	}
 	duplicate, changed, err := dataStore.UpdateTracking(ctx, pkg.TrackingNumber, "UPS", TrackingUpdate{
-		Status:        "InTransit",
-		SubStatus:     "InTransit_Other",
-		LatestMessage: "Departed facility",
-		LastEventAt:   &eventAt,
+		Status:              "InTransit",
+		SubStatus:           "InTransit_Other",
+		LatestMessage:       "Departed facility",
+		EstimatedDeliveryAt: &estimatedDeliveryAt,
+		LastEventAt:         &eventAt,
 	})
-	if err != nil || changed || duplicate.Status != "InTransit" {
+	if err != nil || changed || duplicate.Status != "InTransit" || duplicate.EstimatedDeliveryAt == nil {
 		t.Fatalf("duplicate update: changed=%v package=%+v error=%v", changed, duplicate, err)
 	}
 	staleAt := eventAt.Add(-time.Hour)
@@ -60,10 +63,11 @@ func TestPackageLifecycle(t *testing.T) {
 	}
 	newerAt := eventAt.Add(time.Hour)
 	newer, changed, err := dataStore.UpdateTracking(ctx, pkg.TrackingNumber, "UPS", TrackingUpdate{
-		Status:        "InTransit",
-		SubStatus:     "InTransit_Other",
-		LatestMessage: "Departed facility",
-		LastEventAt:   &newerAt,
+		Status:              "InTransit",
+		SubStatus:           "InTransit_Other",
+		LatestMessage:       "Departed facility",
+		EstimatedDeliveryAt: &estimatedDeliveryAt,
+		LastEventAt:         &newerAt,
 	})
 	if err != nil || !changed || !newer.LastEventAt.Equal(newerAt) {
 		t.Fatalf("newer update: changed=%v package=%+v error=%v", changed, newer, err)
@@ -73,12 +77,22 @@ func TestPackageLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(packages) != 1 || packages[0].LatestMessage != "Departed facility" {
+	if len(packages) != 1 || packages[0].LatestMessage != "Departed facility" || packages[0].EstimatedDeliveryAt == nil || !packages[0].EstimatedDeliveryAt.Equal(estimatedDeliveryAt) {
 		t.Fatalf("packages = %+v", packages)
+	}
+	renamed, err := dataStore.RenamePackage(ctx, pkg.ID, "Studio headphones")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renamed.Description != "Studio headphones" {
+		t.Fatalf("renamed package = %+v", renamed)
 	}
 
 	if err := dataStore.ArchivePackage(ctx, pkg.ID); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := dataStore.RenamePackage(ctx, pkg.ID, "Archived headphones"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("archived rename error = %v, want no rows", err)
 	}
 	if _, _, err := dataStore.UpdateTracking(ctx, pkg.TrackingNumber, "UPS", TrackingUpdate{Status: "Delivered"}); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("archived tracking update error = %v, want no rows", err)

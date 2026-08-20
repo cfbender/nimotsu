@@ -14,6 +14,7 @@ import {
   listEmailCandidates,
   listPackages,
   listTrackingEvents,
+  renamePackage,
   saveConnectionSettings,
   setPackageNotifications,
   syncGmail,
@@ -22,7 +23,7 @@ import {
   type TrackingEvent,
   type TrackedPackage,
 } from './api'
-import { formatCarrier, formatEventDate, formatRelativeDate, formatStatus } from './format'
+import { formatCarrier, formatEstimatedDelivery, formatEventDate, formatRelativeDate, formatStatus } from './format'
 import { enablePushNotifications } from './push'
 import { getThemeMode, saveThemeMode, type ThemeMode } from './theme'
 
@@ -71,6 +72,12 @@ export default function App() {
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Could not update notifications')
     }
+  }
+
+  async function renameTrackedPackage(pkg: TrackedPackage, description: string) {
+    const updated = await renamePackage(pkg.id, description)
+    setPackages((current) => current.map((item) => (item.id === updated.id ? updated : item)))
+    setSelectedPackage((current) => current?.id === updated.id ? updated : current)
   }
 
   async function removePackage(pkg: TrackedPackage) {
@@ -158,6 +165,7 @@ export default function App() {
                         <div className="package-meta">
                           <span>{pkg.tracking_number}</span>
                           {pkg.carrier && <><span aria-hidden="true">·</span><span>{formatCarrier(pkg.carrier)}</span></>}
+                          {pkg.estimated_delivery_at && <><span aria-hidden="true">·</span><span>ETA {formatEstimatedDelivery(pkg.estimated_delivery_at)}</span></>}
                           <span className="package-update"><span aria-hidden="true">·</span> {formatRelativeDate(pkg.last_event_at)}</span>
                         </div>
                       </div>
@@ -207,6 +215,7 @@ export default function App() {
         <PackageDetailSheet
           pkg={selectedPackage}
           onClose={() => setSelectedPackage(null)}
+          onRename={(description) => renameTrackedPackage(selectedPackage, description)}
           onToggleNotifications={() => void toggleNotifications(selectedPackage)}
           onArchive={() => setArchiveTarget(selectedPackage)}
         />
@@ -228,17 +237,25 @@ export default function App() {
 function PackageDetailSheet({
   pkg,
   onClose,
+  onRename,
   onToggleNotifications,
   onArchive,
 }: {
   pkg: TrackedPackage
   onClose: () => void
+  onRename: (description: string) => Promise<void>
   onToggleNotifications: () => void
   onArchive: () => void
 }) {
   const [events, setEvents] = useState<TrackingEvent[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [renaming, setRenaming] = useState(false)
+  const [description, setDescription] = useState(pkg.description)
+  const [renameError, setRenameError] = useState('')
+  const [savingName, setSavingName] = useState(false)
+
+  useEffect(() => setDescription(pkg.description), [pkg.description])
 
   useEffect(() => {
     let active = true
@@ -251,13 +268,54 @@ function PackageDetailSheet({
     return () => { active = false }
   }, [pkg.id])
 
+  async function submitRename(event: FormEvent) {
+    event.preventDefault()
+    const nextDescription = description.trim()
+    if (!nextDescription) {
+      setRenameError('Package name is required')
+      return
+    }
+    if (nextDescription === pkg.description) {
+      setRenaming(false)
+      return
+    }
+    setSavingName(true)
+    setRenameError('')
+    try {
+      await onRename(nextDescription)
+      setRenaming(false)
+    } catch (requestError) {
+      setRenameError(requestError instanceof Error ? requestError.message : 'Could not rename package')
+    } finally {
+      setSavingName(false)
+    }
+  }
+
   return (
     <Sheet title="Shipment details" onClose={onClose}>
       <div className={`detail-hero status-${pkg.status.toLowerCase()}`}>
         <div className="detail-status-mark"><PackageIcon /></div>
-        <div>
+        <div className="detail-copy">
           <span className="status-pill">{formatStatus(pkg.status)}</span>
-          <h3>{pkg.description}</h3>
+          {renaming ? (
+            <form className="rename-form" onSubmit={(event) => void submitRename(event)}>
+              <input autoFocus required aria-label="Package name" value={description} onChange={(event) => setDescription(event.target.value)} />
+              <div>
+                <button type="button" disabled={savingName} onClick={() => {
+                  setDescription(pkg.description)
+                  setRenameError('')
+                  setRenaming(false)
+                }}>Cancel</button>
+                <button className="rename-save" type="submit" disabled={savingName}>{savingName ? 'Saving…' : 'Save'}</button>
+              </div>
+              {renameError && <p className="rename-error" role="alert">{renameError}</p>}
+            </form>
+          ) : (
+            <div className="detail-title">
+              <h3>{pkg.description}</h3>
+              <button className="rename-trigger" type="button" aria-label="Rename package" onClick={() => setRenaming(true)}><EditIcon /></button>
+            </div>
+          )}
           <p>
             {pkg.latest_message || pkg.tracking_error || 'Waiting for a tracking update'}
             {pkg.latest_location && <span className="latest-location"><LocationIcon />{pkg.latest_location}</span>}
@@ -267,7 +325,8 @@ function PackageDetailSheet({
 
       <dl className="shipment-facts">
         <div><dt>Carrier</dt><dd>{pkg.carrier ? formatCarrier(pkg.carrier) : 'Not detected'}</dd></div>
-        <div><dt>Tracking number</dt><dd>{pkg.tracking_number}</dd></div>
+        <div><dt>Estimated delivery</dt><dd>{pkg.estimated_delivery_at ? formatEstimatedDelivery(pkg.estimated_delivery_at) : 'Not available yet'}</dd></div>
+        <div className="tracking-number-fact"><dt>Tracking number</dt><dd>{pkg.tracking_number}</dd></div>
       </dl>
 
       <div className="detail-actions">
@@ -834,6 +893,10 @@ function LocationIcon() {
 
 function ArchiveIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M6 7l1 13h10l1-13M9 4h6l1 3H8zM10 11h4" /></svg>
+}
+
+function EditIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 20 4.2-1 10.6-10.6a2.1 2.1 0 0 0-3-3L5.2 16 4 20ZM14.5 6.7l2.8 2.8" /></svg>
 }
 
 function CloseIcon() {

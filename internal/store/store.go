@@ -32,6 +32,7 @@ type Package struct {
 	SubStatus            string     `json:"sub_status"`
 	LatestMessage        string     `json:"latest_message"`
 	LatestLocation       string     `json:"latest_location"`
+	EstimatedDeliveryAt  *time.Time `json:"estimated_delivery_at"`
 	LastEventAt          *time.Time `json:"last_event_at"`
 	TrackingError        string     `json:"tracking_error"`
 	NotificationsEnabled bool       `json:"notifications_enabled"`
@@ -41,28 +42,30 @@ type Package struct {
 }
 
 type NewPackage struct {
-	Description        string
-	TrackingNumber     string
-	Carrier            string
-	TrackingProvider   string
-	TrackingProviderID string
-	Status             string
-	SubStatus          string
-	LatestMessage      string
-	LatestLocation     string
-	LastEventAt        *time.Time
-	TrackingError      string
-	Events             []TrackingUpdate
+	Description         string
+	TrackingNumber      string
+	Carrier             string
+	TrackingProvider    string
+	TrackingProviderID  string
+	Status              string
+	SubStatus           string
+	LatestMessage       string
+	LatestLocation      string
+	EstimatedDeliveryAt *time.Time
+	LastEventAt         *time.Time
+	TrackingError       string
+	Events              []TrackingUpdate
 }
 
 type TrackingUpdate struct {
-	Provider      string
-	ProviderID    string
-	Status        string
-	SubStatus     string
-	LatestMessage string
-	Location      string
-	LastEventAt   *time.Time
+	Provider            string
+	ProviderID          string
+	Status              string
+	SubStatus           string
+	LatestMessage       string
+	Location            string
+	EstimatedDeliveryAt *time.Time
+	LastEventAt         *time.Time
 }
 
 type TrackingEvent struct {
@@ -94,7 +97,7 @@ type EmailCandidate struct {
 
 const packageColumns = `
 	id, description, tracking_number, carrier, tracking_provider, tracking_provider_id, status, sub_status,
-	latest_message, latest_location, last_event_at, tracking_error, notifications_enabled,
+	latest_message, latest_location, estimated_delivery_at, last_event_at, tracking_error, notifications_enabled,
 	archived, created_at, updated_at`
 
 func Open(path string) (*Store, error) {
@@ -140,6 +143,7 @@ CREATE TABLE IF NOT EXISTS packages (
     sub_status TEXT NOT NULL DEFAULT '',
     latest_message TEXT NOT NULL DEFAULT '',
     latest_location TEXT NOT NULL DEFAULT '',
+    estimated_delivery_at INTEGER,
     last_event_at INTEGER,
     tracking_error TEXT NOT NULL DEFAULT '',
     notifications_enabled INTEGER NOT NULL DEFAULT 1,
@@ -234,6 +238,11 @@ func (s *Store) ensurePackageTrackingColumns(ctx context.Context) error {
 		}
 		if _, err := s.db.ExecContext(ctx, `ALTER TABLE packages ADD COLUMN `+column+` TEXT NOT NULL DEFAULT ''`); err != nil {
 			return fmt.Errorf("add package %s: %w", column, err)
+		}
+	}
+	if !columns["estimated_delivery_at"] {
+		if _, err := s.db.ExecContext(ctx, `ALTER TABLE packages ADD COLUMN estimated_delivery_at INTEGER`); err != nil {
+			return fmt.Errorf("add package estimated_delivery_at: %w", err)
 		}
 	}
 	return nil
@@ -356,6 +365,7 @@ func (s *Store) CreatePackage(ctx context.Context, input NewPackage) (Package, e
 		SubStatus:            input.SubStatus,
 		LatestMessage:        input.LatestMessage,
 		LatestLocation:       input.LatestLocation,
+		EstimatedDeliveryAt:  input.EstimatedDeliveryAt,
 		LastEventAt:          input.LastEventAt,
 		TrackingError:        input.TrackingError,
 		NotificationsEnabled: true,
@@ -363,7 +373,10 @@ func (s *Store) CreatePackage(ctx context.Context, input NewPackage) (Package, e
 		UpdatedAt:            now,
 	}
 
-	var lastEventUnix any
+	var estimatedDeliveryUnix, lastEventUnix any
+	if pkg.EstimatedDeliveryAt != nil {
+		estimatedDeliveryUnix = pkg.EstimatedDeliveryAt.UTC().Unix()
+	}
 	if pkg.LastEventAt != nil {
 		lastEventUnix = pkg.LastEventAt.UTC().Unix()
 	}
@@ -376,8 +389,8 @@ func (s *Store) CreatePackage(ctx context.Context, input NewPackage) (Package, e
 	result, err := tx.ExecContext(ctx, `
 INSERT INTO packages (
     id, description, tracking_number, carrier, tracking_provider, tracking_provider_id, status, sub_status,
-    latest_message, latest_location, last_event_at, tracking_error, notifications_enabled, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+    latest_message, latest_location, estimated_delivery_at, last_event_at, tracking_error, notifications_enabled, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
 ON CONFLICT(tracking_number) DO UPDATE SET
     description = excluded.description,
     carrier = excluded.carrier,
@@ -387,6 +400,7 @@ ON CONFLICT(tracking_number) DO UPDATE SET
     sub_status = excluded.sub_status,
     latest_message = excluded.latest_message,
     latest_location = excluded.latest_location,
+    estimated_delivery_at = excluded.estimated_delivery_at,
     last_event_at = excluded.last_event_at,
     tracking_error = excluded.tracking_error,
     notifications_enabled = 1,
@@ -394,7 +408,7 @@ ON CONFLICT(tracking_number) DO UPDATE SET
     updated_at = excluded.updated_at
 WHERE packages.archived = 1`,
 		pkg.ID, pkg.Description, pkg.TrackingNumber, pkg.Carrier, pkg.TrackingProvider, pkg.TrackingProviderID, pkg.Status, pkg.SubStatus,
-		pkg.LatestMessage, pkg.LatestLocation, lastEventUnix, pkg.TrackingError, now.Unix(), now.Unix(),
+		pkg.LatestMessage, pkg.LatestLocation, estimatedDeliveryUnix, lastEventUnix, pkg.TrackingError, now.Unix(), now.Unix(),
 	)
 	if err != nil {
 		return Package{}, fmt.Errorf("create package: %w", err)
@@ -443,6 +457,21 @@ UPDATE packages SET notifications_enabled = ?, updated_at = ? WHERE id = ? AND a
 	return s.packageByID(ctx, id)
 }
 
+func (s *Store) RenamePackage(ctx context.Context, id, description string) (Package, error) {
+	now := time.Now().UTC().Truncate(time.Second)
+	result, err := s.db.ExecContext(ctx, `
+UPDATE packages SET description = ?, updated_at = ? WHERE id = ? AND archived = 0`,
+		description, now.Unix(), id,
+	)
+	if err != nil {
+		return Package{}, fmt.Errorf("rename package: %w", err)
+	}
+	if rows, _ := result.RowsAffected(); rows == 0 {
+		return Package{}, sql.ErrNoRows
+	}
+	return s.packageByID(ctx, id)
+}
+
 func (s *Store) ArchivePackage(ctx context.Context, id string) error {
 	result, err := s.db.ExecContext(ctx, `UPDATE packages SET archived = 1, updated_at = ? WHERE id = ? AND archived = 0`, time.Now().UTC().Unix(), id)
 	if err != nil {
@@ -457,7 +486,7 @@ func (s *Store) ArchivePackage(ctx context.Context, id string) error {
 func (s *Store) SetRegistrationError(ctx context.Context, id, carrier, status, trackingError string) error {
 	result, err := s.db.ExecContext(ctx, `
 UPDATE packages SET carrier = ?, tracking_provider = '', tracking_provider_id = '', status = ?, sub_status = '', latest_message = '',
-    latest_location = '', last_event_at = NULL, tracking_error = ?, updated_at = ?
+    latest_location = '', estimated_delivery_at = NULL, last_event_at = NULL, tracking_error = ?, updated_at = ?
 WHERE id = ? AND archived = 0`, carrier, status, trackingError, time.Now().UTC().Unix(), id)
 	if err != nil {
 		return fmt.Errorf("set package registration error: %w", err)
@@ -505,20 +534,24 @@ func (s *Store) UpdateTracking(ctx context.Context, trackingNumber, carrier stri
 	pkg.SubStatus = update.SubStatus
 	pkg.LatestMessage = update.LatestMessage
 	pkg.LatestLocation = update.Location
+	pkg.EstimatedDeliveryAt = update.EstimatedDeliveryAt
 	if update.LastEventAt != nil || update.Provider != "" {
 		pkg.LastEventAt = update.LastEventAt
 	}
 	pkg.TrackingError = ""
 	pkg.UpdatedAt = now
 
-	var eventUnix any
+	var estimatedDeliveryUnix, eventUnix any
+	if pkg.EstimatedDeliveryAt != nil {
+		estimatedDeliveryUnix = pkg.EstimatedDeliveryAt.Unix()
+	}
 	if pkg.LastEventAt != nil {
 		eventUnix = pkg.LastEventAt.Unix()
 	}
 	if _, err := tx.ExecContext(ctx, `
 UPDATE packages SET carrier = ?, tracking_provider = ?, tracking_provider_id = ?, status = ?, sub_status = ?, latest_message = ?,
-    latest_location = ?, last_event_at = ?, tracking_error = '', updated_at = ? WHERE id = ?`,
-		pkg.Carrier, pkg.TrackingProvider, pkg.TrackingProviderID, pkg.Status, pkg.SubStatus, pkg.LatestMessage, pkg.LatestLocation, eventUnix, now.Unix(), pkg.ID,
+    latest_location = ?, estimated_delivery_at = ?, last_event_at = ?, tracking_error = '', updated_at = ? WHERE id = ?`,
+		pkg.Carrier, pkg.TrackingProvider, pkg.TrackingProviderID, pkg.Status, pkg.SubStatus, pkg.LatestMessage, pkg.LatestLocation, estimatedDeliveryUnix, eventUnix, now.Unix(), pkg.ID,
 	); err != nil {
 		return Package{}, false, fmt.Errorf("update tracking: %w", err)
 	}
@@ -795,15 +828,19 @@ type scanner interface {
 
 func scanPackage(row scanner) (Package, error) {
 	var pkg Package
-	var lastEvent sql.NullInt64
+	var estimatedDelivery, lastEvent sql.NullInt64
 	var notifications, archived int
 	var created, updated int64
 	if err := row.Scan(
 		&pkg.ID, &pkg.Description, &pkg.TrackingNumber, &pkg.Carrier, &pkg.TrackingProvider, &pkg.TrackingProviderID, &pkg.Status,
-		&pkg.SubStatus, &pkg.LatestMessage, &pkg.LatestLocation, &lastEvent, &pkg.TrackingError,
+		&pkg.SubStatus, &pkg.LatestMessage, &pkg.LatestLocation, &estimatedDelivery, &lastEvent, &pkg.TrackingError,
 		&notifications, &archived, &created, &updated,
 	); err != nil {
 		return Package{}, err
+	}
+	if estimatedDelivery.Valid {
+		value := time.Unix(estimatedDelivery.Int64, 0).UTC()
+		pkg.EstimatedDeliveryAt = &value
 	}
 	if lastEvent.Valid {
 		value := time.Unix(lastEvent.Int64, 0).UTC()

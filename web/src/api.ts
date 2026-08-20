@@ -12,6 +12,7 @@ export interface TrackedPackage {
   sub_status: string
   latest_message: string
   latest_location: string
+  estimated_delivery_at: string | null
   last_event_at: string | null
   tracking_error: string
   notifications_enabled: boolean
@@ -96,6 +97,13 @@ export async function setPackageNotifications(id: string, enabled: boolean): Pro
   return request<TrackedPackage>(`/api/packages/${id}`, {
     method: 'PATCH',
     body: JSON.stringify({ notifications_enabled: enabled }),
+  })
+}
+
+export async function renamePackage(id: string, description: string): Promise<TrackedPackage> {
+  return request<TrackedPackage>(`/api/packages/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ description }),
   })
 }
 

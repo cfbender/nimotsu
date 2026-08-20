@@ -174,33 +174,47 @@ func (s *Server) savePackage(ctx context.Context, description, trackingNumber, r
 		})
 	}
 	return s.store.CreatePackage(ctx, store.NewPackage{
-		Description:        description,
-		TrackingNumber:     trackingNumber,
-		Carrier:            carrier,
-		TrackingProvider:   providerName,
-		TrackingProviderID: registration.ProviderID,
-		Status:             status,
-		SubStatus:          registration.SubStatus,
-		LatestMessage:      registration.LatestMessage,
-		LatestLocation:     registration.Location,
-		LastEventAt:        registration.LastEventAt,
-		TrackingError:      trackingError,
-		Events:             events,
+		Description:         description,
+		TrackingNumber:      trackingNumber,
+		Carrier:             carrier,
+		TrackingProvider:    providerName,
+		TrackingProviderID:  registration.ProviderID,
+		Status:              status,
+		SubStatus:           registration.SubStatus,
+		LatestMessage:       registration.LatestMessage,
+		LatestLocation:      registration.Location,
+		EstimatedDeliveryAt: registration.EstimatedDeliveryAt,
+		LastEventAt:         registration.LastEventAt,
+		TrackingError:       trackingError,
+		Events:              events,
 	})
 }
 
 func (s *Server) updatePackage(w http.ResponseWriter, r *http.Request) {
 	var request struct {
-		NotificationsEnabled *bool `json:"notifications_enabled"`
+		Description          *string `json:"description"`
+		NotificationsEnabled *bool   `json:"notifications_enabled"`
 	}
 	if err := readJSON(w, r, &request); err != nil {
 		return
 	}
-	if request.NotificationsEnabled == nil {
-		writeError(w, http.StatusBadRequest, "notifications_enabled is required")
+	if request.Description == nil && request.NotificationsEnabled == nil {
+		writeError(w, http.StatusBadRequest, "description or notifications_enabled is required")
 		return
 	}
-	pkg, err := s.store.SetNotifications(r.Context(), r.PathValue("id"), *request.NotificationsEnabled)
+	var pkg store.Package
+	var err error
+	if request.Description != nil {
+		description := strings.TrimSpace(*request.Description)
+		if description == "" {
+			writeError(w, http.StatusBadRequest, "description is required")
+			return
+		}
+		pkg, err = s.store.RenamePackage(r.Context(), r.PathValue("id"), description)
+	}
+	if err == nil && request.NotificationsEnabled != nil {
+		pkg, err = s.store.SetNotifications(r.Context(), r.PathValue("id"), *request.NotificationsEnabled)
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "package not found")
 		return
@@ -418,11 +432,12 @@ func (s *Server) trackingWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pkg, changed, err := s.store.UpdateTracking(r.Context(), update.TrackingNumber, update.Carrier, store.TrackingUpdate{
-		Status:        update.Status,
-		SubStatus:     update.SubStatus,
-		LatestMessage: update.LatestMessage,
-		Location:      update.Location,
-		LastEventAt:   update.LastEventAt,
+		Status:              update.Status,
+		SubStatus:           update.SubStatus,
+		LatestMessage:       update.LatestMessage,
+		Location:            update.Location,
+		EstimatedDeliveryAt: update.EstimatedDeliveryAt,
+		LastEventAt:         update.LastEventAt,
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		// The provider account may contain trackers not owned by this instance.

@@ -34,6 +34,7 @@ func TestRegisterDetectsCarrierAndCreatesTrackingRegistration(t *testing.T) {
 		response.Header().Set("Content-Type", "application/json")
 		_, _ = response.Write([]byte(`{
   "carrier":"usps","tracking_number":"9400110898825022579493",
+	"eta":"2026-08-23T00:00:00Z",
   "tracking_status":{"status":"TRANSIT","status_details":"Moving through network","status_date":"2026-08-20T12:00:00Z","substatus":{"code":"departed_facility","text":"Departed facility","action_required":false},"location":{"city":"Los Angeles","state":"CA","zip":"90001","country":"US"}},
   "tracking_history":[{"status":"PRE_TRANSIT","status_details":"Label created","status_date":"2026-08-19T10:00:00Z","substatus":{"code":"information_received","text":"Information received"},"location":{"city":"Phoenix","state":"AZ","zip":"85001","country":"US"}}],"messages":[]
 }`))
@@ -57,6 +58,9 @@ func TestRegisterDetectsCarrierAndCreatesTrackingRegistration(t *testing.T) {
 	}
 	if registration.LastEventAt == nil || !registration.LastEventAt.Equal(time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)) {
 		t.Fatalf("last event = %v", registration.LastEventAt)
+	}
+	if registration.EstimatedDeliveryAt == nil || !registration.EstimatedDeliveryAt.Equal(time.Date(2026, 8, 23, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("estimated delivery = %v", registration.EstimatedDeliveryAt)
 	}
 }
 
@@ -131,7 +135,7 @@ func TestRegisterReturnsShippoErrors(t *testing.T) {
 }
 
 func TestParseWebhookAuthenticatesTokenAndNormalizesUpdate(t *testing.T) {
-	body := []byte(`{"event":"track_updated","test":false,"data":{"carrier":"usps","tracking_number":"9400110898825022579493","tracking_status":{"status":"TRANSIT","status_details":"Out for delivery","status_date":"2026-08-20T14:30:00Z","substatus":{"code":"out_for_delivery","text":"Out for delivery","action_required":false},"location":{"city":"Portland","state":"OR","zip":"97201","country":"US"}},"tracking_history":[],"messages":[]}}`)
+	body := []byte(`{"event":"track_updated","test":false,"data":{"carrier":"usps","tracking_number":"9400110898825022579493","eta":"2026-08-23T00:00:00Z","tracking_status":{"status":"TRANSIT","status_details":"Out for delivery","status_date":"2026-08-20T14:30:00Z","substatus":{"code":"out_for_delivery","text":"Out for delivery","action_required":false},"location":{"city":"Portland","state":"OR","zip":"97201","country":"US"}},"tracking_history":[],"messages":[]}}`)
 	request := httptest.NewRequest(http.MethodPost, "/api/webhooks/tracking?token=webhook-token", strings.NewReader(string(body)))
 	client := New("test-token", "webhook-token")
 
@@ -144,6 +148,9 @@ func TestParseWebhookAuthenticatesTokenAndNormalizesUpdate(t *testing.T) {
 	}
 	if update.LatestMessage != "Out for delivery" || update.Location != "Portland, OR 97201, US" || update.LastEventAt == nil {
 		t.Fatalf("update details = %+v", update)
+	}
+	if update.EstimatedDeliveryAt == nil || !update.EstimatedDeliveryAt.Equal(time.Date(2026, 8, 23, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("estimated delivery = %v", update.EstimatedDeliveryAt)
 	}
 }
 

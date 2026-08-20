@@ -66,3 +66,12 @@ export function formatRelativeDate(value: string | null): string {
   if (days < 0 && days > -7) return `Updated ${Math.abs(days)} days ago`
   return `Updated ${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
 }
+
+export function formatEstimatedDelivery(value: string): string {
+  return new Date(value).toLocaleDateString(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  })
+}

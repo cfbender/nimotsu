@@ -16,13 +16,14 @@ var (
 )
 
 type Update struct {
-	TrackingNumber string
-	Carrier        string
-	Status         string
-	SubStatus      string
-	LatestMessage  string
-	Location       string
-	LastEventAt    *time.Time
+	TrackingNumber      string
+	Carrier             string
+	Status              string
+	SubStatus           string
+	LatestMessage       string
+	Location            string
+	EstimatedDeliveryAt *time.Time
+	LastEventAt         *time.Time
 }
 
 type Registration struct {

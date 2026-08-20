@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatCarrier, formatStatus } from './format'
+import { formatCarrier, formatEstimatedDelivery, formatStatus } from './format'
 
 describe('formatStatus', () => {
   it('uses friendly tracking labels', () => {
@@ -20,5 +20,9 @@ describe('formatStatus', () => {
     expect(formatCarrier('dhl_ecommerce')).toBe('DHL eCommerce')
     expect(formatCarrier('fedex_smartpost')).toBe('FedEx Ground Economy')
     expect(formatCarrier('canada_post')).toBe('Canada Post')
+  })
+
+  it('formats estimated delivery dates without shifting UTC midnight', () => {
+    expect(formatEstimatedDelivery('2026-08-23T00:00:00Z')).toBe('Sun, Aug 23')
   })
 })
