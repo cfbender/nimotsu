@@ -19,3 +19,9 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# Capacitor reads plugin permission metadata through reflection at runtime.
+# Preserve the nested annotations so permission checks work in minified builds.
+-keepattributes RuntimeVisibleAnnotations,AnnotationDefault
+-keep @interface com.getcapacitor.annotation.CapacitorPlugin { *; }
+-keep @interface com.getcapacitor.annotation.Permission { *; }
