@@ -6,6 +6,7 @@ web/dist/
 *.apk
 android/.gradle/
 android/app/build/
+android/release/
 android/local.properties
 android/app/google-services.json
 .amp/portals/

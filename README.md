@@ -2,6 +2,8 @@
 
 Nimotsu is a small, self-hosted package tracker with an Android app. A single Go process serves the API and web app, stores data in SQLite, registers shipments with Shippo, receives authenticated tracking webhooks, and sends status updates through Firebase Cloud Messaging.
 
+Nimotsu is intentionally single-tenant. It has no users, accounts, or tenancy model: one instance owns one package list, Gmail connection, and set of devices. `NIMOTSU_API_TOKEN` provides one shared bearer token for the API. For browser access over the public internet, put the instance behind an authentication reverse proxy and allow Shippo's separately authenticated `/api/webhooks/tracking` endpoint through to Nimotsu.
+
 The repository currently contains the first end-to-end slice:
 
 - mobile-first package list, manual add, carrier auto-detection, archive, and per-package notification toggle
@@ -21,7 +23,7 @@ mise run check
 scripts/dev
 ```
 
-The setup script installs Go, Node, Java, aube, and the Android 36 command-line SDK. It also activates mise in both login and interactive Bash shells so orb services see the same toolchain.
+The setup script uses mise to install Go, Node, Java, aube, and Android command-line tools, then installs the Android 36 platform and build tools. It also activates mise in both login and interactive Bash shells so orb services see the same toolchain.
 
 ### Amp orbs
 
@@ -101,14 +103,43 @@ Google classifies `gmail.readonly` as a restricted scope. A publicly distributed
 
 The APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`. On first launch, enter the HTTPS URL of your Nimotsu server and its API token. Android 13+ requires the user to grant notification permission; the app asks only when **Enable notifications** is tapped.
 
+### Signed CI builds
+
+The Android workflow builds a debug-signed APK for pull requests and a verified, release-signed APK for every push to `main`. A `v*.*.*` tag also creates a GitHub release containing the signed APK. APKs from `main` use the package version plus the commit in their artifact name; tagged builds use the tag version.
+
+Generate the long-lived release keystore once and keep a backup. Losing it prevents future APKs from updating an installed release:
+
+```sh
+export NIMOTSU_ANDROID_KEYSTORE_PASSWORD='<strong password>'
+export NIMOTSU_ANDROID_KEY_ALIAS='nimotsu'
+export NIMOTSU_ANDROID_KEY_PASSWORD='<strong password>'
+mise exec -- aube run android:signing:setup
+```
+
+The helper writes the four signing values to the ignored, mode-0600 `android/release/github-actions-secrets.env`; upload it with the printed `gh secret set` command and then delete that dotenv file. Alternatively, add these repository Actions secrets manually:
+
+| Secret | Value |
+| --- | --- |
+| `NIMOTSU_ANDROID_KEYSTORE_BASE64` | `base64 -w 0 android/release/nimotsu-release.jks` |
+| `NIMOTSU_ANDROID_KEYSTORE_PASSWORD` | Keystore password used above |
+| `NIMOTSU_ANDROID_KEY_ALIAS` | Alias used above, normally `nimotsu` |
+| `NIMOTSU_ANDROID_KEY_PASSWORD` | Key password used above |
+| `NIMOTSU_GOOGLE_SERVICES_JSON_BASE64` | Optional: `base64 -w 0 android/app/google-services.json` |
+
+The Firebase secret is optional, but CI-built APKs cannot register for push notifications without it. The backend still needs the matching service account through `NIMOTSU_FIREBASE_CREDENTIALS` at runtime.
+
 ## Container
+
+Pushes to `main` publish `ghcr.io/cfbender/nimotsu:latest` and `:main`. Tags such as `v1.2.3` additionally publish `:1.2.3`, `:1.2`, and `:v1.2.3`.
 
 ```sh
 cp .env.example .env
 docker compose up --build
 ```
 
-The compose service stores SQLite under the `nimotsu-data` volume and listens on port 8080. Mount the Firebase service-account JSON into the container if push is enabled.
+For a deployment that does not build locally, set the Compose service to `image: ghcr.io/cfbender/nimotsu:latest` instead of `build: .`. The service stores SQLite under the `nimotsu-data` volume and listens on port 8080. Mount the Firebase service-account JSON into the container if push is enabled.
+
+The source artwork for the web icon, Android launcher icon, and splash screen is [`docs/assets/nimotsu-icon.png`](docs/assets/nimotsu-icon.png). Generated web assets live in `web/public`; Android density-specific assets live under `android/app/src/main/res`.
 
 ## Checks
 

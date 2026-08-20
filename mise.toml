@@ -1,6 +1,7 @@
 min_version = "2026.8.9"
 
 [tools]
+android-sdk = "23.0"
 aube = "1.41.0"
 go = "1.25.13"
 java = "temurin-21.0.12+8.0.LTS"

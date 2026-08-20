@@ -15,7 +15,10 @@
     "android:add": "cap add android",
     "android:sync": "cap sync android",
     "android:open": "cap open android",
-    "android:apk": "aube run build && aube run android:sync && cd android && ./gradlew assembleDebug"
+    "android:apk": "aube run android:build:debug",
+    "android:build:debug": "aube run build && aube run android:sync && ./android/gradlew -p android assembleDebug",
+    "android:build:release": "aube run build && aube run android:sync && ./android/gradlew -p android assembleRelease",
+    "android:signing:setup": "node scripts/create-android-keystore.mjs"
   },
   "dependencies": {
     "@capacitor/browser": "8.0.4",
