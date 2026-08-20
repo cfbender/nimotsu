@@ -1,0 +1,15 @@
+services:
+  nimotsu:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      NIMOTSU_API_TOKEN: ${NIMOTSU_API_TOKEN:-}
+      NIMOTSU_17TRACK_KEY: ${NIMOTSU_17TRACK_KEY:-}
+      NIMOTSU_FIREBASE_CREDENTIALS: ${NIMOTSU_FIREBASE_CREDENTIALS:-}
+    volumes:
+      - nimotsu-data:/data
+
+volumes:
+  nimotsu-data:

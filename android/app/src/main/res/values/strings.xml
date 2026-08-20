@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Nimotsu</string>
+    <string name="title_activity_main">Nimotsu</string>
+    <string name="package_name">dev.nimotsu.app</string>
+    <string name="custom_url_scheme">dev.nimotsu.app</string>
+</resources>

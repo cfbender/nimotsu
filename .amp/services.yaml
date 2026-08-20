@@ -1,0 +1,7 @@
+services:
+  app:
+    command: scripts/dev
+    health: /api/health
+    portal:
+      title: Nimotsu
+      description: Mobile-first package tracker development app.

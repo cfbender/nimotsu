@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+mise_bin="$HOME/.local/bin/mise"
+api_port="${NIMOTSU_DEV_API_PORT:-$(python3 - <<'PY'
+import socket
+with socket.socket() as listener:
+    listener.bind(('127.0.0.1', 0))
+    print(listener.getsockname()[1])
+PY
+)}"
+
+mkdir -p .amp
+"$mise_bin" exec -- go build -o .amp/nimotsu-dev ./cmd/nimotsu
+NIMOTSU_LISTEN="127.0.0.1:${api_port}" \
+NIMOTSU_WEB_DIR="" \
+  .amp/nimotsu-dev &
+api_pid=$!
+
+cleanup() {
+  kill "$api_pid" 2>/dev/null || true
+  wait "$api_pid" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+NIMOTSU_DEV_API_URL="http://127.0.0.1:${api_port}" \
+  "$mise_bin" exec -- aube run dev:web -- --host 0.0.0.0 --port "${PORT:-5173}"

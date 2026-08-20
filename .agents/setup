@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+mise_bin="$HOME/.local/bin/mise"
+
+if [[ ! -x "$mise_bin" ]]; then
+  echo "Installing mise"
+  curl -fsSL https://mise.run | sh
+fi
+
+if ! command -v unzip >/dev/null || ! command -v python3 >/dev/null; then
+  echo "Installing system dependencies"
+  sudo apt-get update -qq
+  sudo apt-get install -y -qq unzip python3
+fi
+
+profile_marker="# nimotsu mise and Android SDK"
+profile_block=$(cat <<'EOF'
+# nimotsu mise and Android SDK
+eval "$("$HOME/.local/bin/mise" activate bash)"
+export ANDROID_HOME="$HOME/.local/share/android-sdk"
+export ANDROID_SDK_ROOT="$ANDROID_HOME"
+export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+EOF
+)
+
+for profile in "$HOME/.bash_profile" "$HOME/.bashrc"; do
+  if ! grep -Fqx "$profile_marker" "$profile" 2>/dev/null; then
+    printf '\n%s\n' "$profile_block" >> "$profile"
+  fi
+done
+
+echo "Installing pinned toolchains"
+"$mise_bin" trust "$repo_root/mise.toml"
+"$mise_bin" install
+
+echo "Installing JavaScript dependencies with aube"
+"$mise_bin" exec -- aube install --frozen-lockfile
+
+echo "Downloading Go modules"
+"$mise_bin" exec -- go mod download
+
+android_home="$HOME/.local/share/android-sdk"
+sdkmanager="$android_home/cmdline-tools/latest/bin/sdkmanager"
+if [[ ! -x "$sdkmanager" ]]; then
+  echo "Installing Android command-line tools"
+  archive="$(mktemp)"
+  trap 'rm -f "$archive"' EXIT
+  curl -fsSL "https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip" -o "$archive"
+  mkdir -p "$android_home/cmdline-tools"
+  rm -rf "$android_home/cmdline-tools/latest" "$android_home/cmdline-tools/cmdline-tools"
+  unzip -q "$archive" -d "$android_home/cmdline-tools"
+  mv "$android_home/cmdline-tools/cmdline-tools" "$android_home/cmdline-tools/latest"
+  rm -f "$archive"
+  trap - EXIT
+fi
+
+if [[ ! -d "$android_home/platforms/android-36" || ! -d "$android_home/build-tools/36.0.0" || ! -d "$android_home/build-tools/35.0.0" ]]; then
+  echo "Installing Android SDK 36"
+  yes | "$mise_bin" exec -- "$sdkmanager" --licenses >/dev/null || true
+  "$mise_bin" exec -- "$sdkmanager" "platform-tools" "platforms;android-36" "build-tools;35.0.0" "build-tools;36.0.0" >/dev/null
+fi
+
+mkdir -p data
+[[ -f .env ]] || cp -- .env.example .env
+
+echo "Orb setup complete"

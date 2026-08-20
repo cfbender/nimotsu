@@ -1,0 +1,12 @@
+.env
+data/
+node_modules/
+web/dist/
+/nimotsu
+*.apk
+android/.gradle/
+android/app/build/
+android/local.properties
+android/app/google-services.json
+.amp/portals/
+.amp/nimotsu-dev
