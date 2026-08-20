@@ -53,20 +53,21 @@ func TestGmailSyncFindsArchivedMessage(t *testing.T) {
 		if r.URL.Query().Get("maxResults") != "50" {
 			t.Errorf("maxResults = %q", r.URL.Query().Get("maxResults"))
 		}
-		if !strings.Contains(r.URL.Query().Get("q"), "tracking") {
-			t.Errorf("q = %q", r.URL.Query().Get("q"))
+		query := r.URL.Query().Get("q")
+		if !strings.HasPrefix(query, "after:") || strings.Contains(query, "tracking") || strings.Contains(query, "package") {
+			t.Errorf("q = %q, want only the recent-mail cutoff", query)
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"messages": []map[string]string{{"id": "message-1"}}})
 	})
 	mux.HandleFunc("/gmail/v1/users/me/messages/message-1", func(w http.ResponseWriter, _ *http.Request) {
-		body := base64.RawURLEncoding.EncodeToString([]byte("Tracking number: 1Z999AA10123456784"))
+		body := base64.RawURLEncoding.EncodeToString([]byte("Reference: 1Z999AA10123456784"))
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"id":           "message-1",
 			"internalDate": "1787227200000",
 			"payload": map[string]any{
 				"mimeType": "text/plain",
 				"headers": []map[string]string{
-					{"name": "Subject", "value": "Your headphones have shipped"},
+					{"name": "Subject", "value": "Fwd: Order 123 ready"},
 					{"name": "From", "value": "Shop <orders@example.com>"},
 				},
 				"body": map[string]string{"data": body},
@@ -105,7 +106,7 @@ func TestGmailSyncFindsArchivedMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(candidates) != 1 || candidates[0].TrackingNumber != "1Z999AA10123456784" || candidates[0].Description != "Your headphones have shipped" {
+	if len(candidates) != 1 || candidates[0].TrackingNumber != "1Z999AA10123456784" || candidates[0].Description != "Fwd: Order 123 ready" {
 		t.Fatalf("candidates = %+v", candidates)
 	}
 	status, err := service.Status(context.Background())

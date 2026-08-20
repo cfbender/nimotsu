@@ -534,8 +534,13 @@ function SettingsSheet({
   async function scanGmail() {
     setGmailAction('Scanning Gmail…')
     try {
-      setGmailStatus(await syncGmail())
-      setGmailAction('Gmail scan complete')
+      const status = await syncGmail()
+      setGmailStatus(status)
+      setGmailAction(
+        status.candidate_count > 0
+          ? `${status.candidate_count} tracking suggestion${status.candidate_count === 1 ? '' : 's'} ready to review`
+          : 'No tracking numbers found in recent mail',
+      )
       onCandidatesChanged()
     } catch (error) {
       setGmailAction(error instanceof Error ? error.message : 'Could not scan Gmail')

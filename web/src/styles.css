@@ -125,10 +125,10 @@ h1 { margin-bottom: 0; font-family: ui-rounded, "Arial Rounded MT Bold", system-
 .sheet-backdrop { position: fixed; z-index: 20; inset: 0; display: flex; align-items: flex-end; justify-content: center; padding-top: 50px; background: var(--overlay); opacity: 0; transition: opacity .2s ease-out; }
 .sheet-backdrop.sheet-open { opacity: 1; }
 .sheet-backdrop.sheet-opening, .sheet-backdrop.sheet-closing { pointer-events: none; }
-.sheet { width: min(100%, 620px); max-height: calc(100vh - 35px); overflow-y: auto; overscroll-behavior: contain; padding: 11px 22px max(28px, env(safe-area-inset-bottom)); border: 1px solid var(--line); border-bottom: 0; border-radius: 26px 26px 0 0; background: var(--paper); box-shadow: 0 -20px 50px var(--strong-shadow); transform: translateY(calc(100% + 40px)); transition: transform .26s cubic-bezier(.22, .8, .24, 1); will-change: transform; }
+.sheet { width: min(100%, 620px); max-height: calc(100vh - 72px); max-height: calc(100dvh - 72px); overflow-y: auto; overscroll-behavior: contain; padding: 11px 22px max(28px, env(safe-area-inset-bottom)); border: 1px solid var(--line); border-bottom: 0; border-radius: 26px 26px 0 0; background: var(--paper); box-shadow: 0 -20px 50px var(--strong-shadow); transform: translateY(calc(100% + 40px)); transition: transform .26s cubic-bezier(.22, .8, .24, 1); will-change: transform; }
 .sheet-backdrop.sheet-open .sheet { transform: translateY(var(--sheet-drag-y, 0)); }
 .sheet-backdrop.sheet-dragging .sheet { transition: none; user-select: none; }
-.sheet-grab-area { display: grid; height: 24px; place-items: start center; cursor: grab; touch-action: none; }
+.sheet-grab-area { position: sticky; z-index: 2; top: -11px; display: grid; height: 44px; margin: -11px -22px 0; padding-top: 13px; place-items: start center; border-radius: 26px 26px 0 0; background: var(--paper); cursor: grab; touch-action: none; }
 .sheet-dragging .sheet-grab-area { cursor: grabbing; }
 .sheet-handle { width: 42px; height: 5px; border-radius: 99px; background: var(--muted-surface); }
 .sheet-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
