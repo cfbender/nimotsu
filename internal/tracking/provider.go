@@ -21,6 +21,7 @@ type Update struct {
 	Status         string
 	SubStatus      string
 	LatestMessage  string
+	Location       string
 	LastEventAt    *time.Time
 }
 

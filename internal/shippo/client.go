@@ -272,11 +272,19 @@ type trackingStatus struct {
 	StatusDetails string             `json:"status_details"`
 	StatusDate    string             `json:"status_date"`
 	Substatus     *trackingSubstatus `json:"substatus"`
+	Location      *trackingLocation  `json:"location"`
 }
 
 type trackingSubstatus struct {
 	Code string `json:"code"`
 	Text string `json:"text"`
+}
+
+type trackingLocation struct {
+	City    string `json:"city"`
+	State   string `json:"state"`
+	ZIP     string `json:"zip"`
+	Country string `json:"country"`
 }
 
 func (t trackPayload) update() tracking.Update {
@@ -306,6 +314,7 @@ func (t trackPayload) updateFrom(latest *trackingStatus) tracking.Update {
 	}
 	update.Status = canonicalStatus(latest.Status, latest.Substatus)
 	update.LatestMessage = latest.StatusDetails
+	update.Location = formatTrackingLocation(latest.Location)
 	if latest.Substatus != nil {
 		update.SubStatus = pascalCase(latest.Substatus.Code)
 		if update.LatestMessage == "" {
@@ -316,6 +325,20 @@ func (t trackPayload) updateFrom(latest *trackingStatus) tracking.Update {
 		update.LastEventAt = &occurredAt
 	}
 	return update
+}
+
+func formatTrackingLocation(location *trackingLocation) string {
+	if location == nil {
+		return ""
+	}
+	region := strings.TrimSpace(strings.TrimSpace(location.State) + " " + strings.TrimSpace(location.ZIP))
+	parts := make([]string, 0, 3)
+	for _, part := range []string{location.City, region, location.Country} {
+		if part = strings.TrimSpace(part); part != "" {
+			parts = append(parts, part)
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 func canonicalStatus(status string, substatus *trackingSubstatus) string {

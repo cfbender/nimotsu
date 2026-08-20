@@ -149,11 +149,13 @@ func TestPackageTrackingEventsAndCarrierDetection(t *testing.T) {
 			Carrier:       "UPS",
 			Status:        "InTransit",
 			LatestMessage: "Departed facility",
+			Location:      "Los Angeles, CA 90001, US",
 			LastEventAt:   &currentAt,
 		},
 		History: []tracking.Update{{
 			Status:        "PreTransit",
 			LatestMessage: "Label created",
+			Location:      "Phoenix, AZ 85001, US",
 			LastEventAt:   &registeredAt,
 		}},
 	}}
@@ -174,6 +176,9 @@ func TestPackageTrackingEventsAndCarrierDetection(t *testing.T) {
 	if err := json.Unmarshal(created.Body.Bytes(), &pkg); err != nil {
 		t.Fatal(err)
 	}
+	if pkg.LatestLocation != "Los Angeles, CA 90001, US" {
+		t.Fatalf("latest location = %q", pkg.LatestLocation)
+	}
 
 	eventsRequest := httptest.NewRequest(http.MethodGet, "/api/packages/"+pkg.ID+"/events", nil)
 	eventsResponse := httptest.NewRecorder()
@@ -185,7 +190,7 @@ func TestPackageTrackingEventsAndCarrierDetection(t *testing.T) {
 	if err := json.Unmarshal(eventsResponse.Body.Bytes(), &events); err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 2 || events[0].Status != "InTransit" || events[1].Status != "PreTransit" || !events[1].OccurredAt.Equal(registeredAt) {
+	if len(events) != 2 || events[0].Status != "InTransit" || events[0].Location != "Los Angeles, CA 90001, US" || events[1].Status != "PreTransit" || events[1].Location != "Phoenix, AZ 85001, US" || !events[1].OccurredAt.Equal(registeredAt) {
 		t.Fatalf("events = %+v", events)
 	}
 
@@ -290,6 +295,15 @@ func TestTrackingWebhookIsIdempotent(t *testing.T) {
 	case notification := <-notifications:
 		t.Fatalf("duplicate webhook triggered notification: %+v", notification)
 	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestNotificationTextIncludesTrackingLocation(t *testing.T) {
+	title, body := NotificationText(store.Package{
+		Description: "Headphones", Status: "InTransit", LatestMessage: "Arrived at facility", LatestLocation: "Raleigh, NC, US",
+	})
+	if title != "Headphones: In Transit" || body != "Arrived at facility · Raleigh, NC, US" {
+		t.Fatalf("notification = %q, %q", title, body)
 	}
 }
 

@@ -11,6 +11,7 @@ export interface TrackedPackage {
   status: string
   sub_status: string
   latest_message: string
+  latest_location: string
   last_event_at: string | null
   tracking_error: string
   notifications_enabled: boolean
@@ -22,6 +23,7 @@ export interface TrackingEvent {
   status: string
   sub_status: string
   message: string
+  location: string
   occurred_at: string
 }
 

@@ -31,6 +31,7 @@ type Package struct {
 	Status               string     `json:"status"`
 	SubStatus            string     `json:"sub_status"`
 	LatestMessage        string     `json:"latest_message"`
+	LatestLocation       string     `json:"latest_location"`
 	LastEventAt          *time.Time `json:"last_event_at"`
 	TrackingError        string     `json:"tracking_error"`
 	NotificationsEnabled bool       `json:"notifications_enabled"`
@@ -48,6 +49,7 @@ type NewPackage struct {
 	Status             string
 	SubStatus          string
 	LatestMessage      string
+	LatestLocation     string
 	LastEventAt        *time.Time
 	TrackingError      string
 	Events             []TrackingUpdate
@@ -59,6 +61,7 @@ type TrackingUpdate struct {
 	Status        string
 	SubStatus     string
 	LatestMessage string
+	Location      string
 	LastEventAt   *time.Time
 }
 
@@ -66,6 +69,7 @@ type TrackingEvent struct {
 	Status     string    `json:"status"`
 	SubStatus  string    `json:"sub_status"`
 	Message    string    `json:"message"`
+	Location   string    `json:"location"`
 	OccurredAt time.Time `json:"occurred_at"`
 }
 
@@ -90,7 +94,7 @@ type EmailCandidate struct {
 
 const packageColumns = `
 	id, description, tracking_number, carrier, tracking_provider, tracking_provider_id, status, sub_status,
-	latest_message, last_event_at, tracking_error, notifications_enabled,
+	latest_message, latest_location, last_event_at, tracking_error, notifications_enabled,
 	archived, created_at, updated_at`
 
 func Open(path string) (*Store, error) {
@@ -135,6 +139,7 @@ CREATE TABLE IF NOT EXISTS packages (
     status TEXT NOT NULL,
     sub_status TEXT NOT NULL DEFAULT '',
     latest_message TEXT NOT NULL DEFAULT '',
+    latest_location TEXT NOT NULL DEFAULT '',
     last_event_at INTEGER,
     tracking_error TEXT NOT NULL DEFAULT '',
     notifications_enabled INTEGER NOT NULL DEFAULT 1,
@@ -149,6 +154,7 @@ CREATE TABLE IF NOT EXISTS tracking_events (
     status TEXT NOT NULL,
     sub_status TEXT NOT NULL,
     message TEXT NOT NULL,
+    location TEXT NOT NULL DEFAULT '',
     occurred_at INTEGER NOT NULL,
     created_at INTEGER NOT NULL,
     UNIQUE(package_id, status, sub_status, message, occurred_at)
@@ -190,6 +196,9 @@ CREATE TABLE IF NOT EXISTS email_candidates (
 	if err := s.ensurePackageTrackingColumns(ctx); err != nil {
 		return err
 	}
+	if err := s.ensureTrackingEventLocationColumn(ctx); err != nil {
+		return err
+	}
 	if err := s.backfillTrackingEvents(ctx); err != nil {
 		return err
 	}
@@ -219,12 +228,25 @@ func (s *Store) ensurePackageTrackingColumns(ctx context.Context) error {
 	if err := rows.Close(); err != nil {
 		return fmt.Errorf("close packages schema inspection: %w", err)
 	}
-	for _, column := range []string{"carrier", "tracking_provider", "tracking_provider_id"} {
+	for _, column := range []string{"carrier", "tracking_provider", "tracking_provider_id", "latest_location"} {
 		if columns[column] {
 			continue
 		}
 		if _, err := s.db.ExecContext(ctx, `ALTER TABLE packages ADD COLUMN `+column+` TEXT NOT NULL DEFAULT ''`); err != nil {
 			return fmt.Errorf("add package %s: %w", column, err)
+		}
+	}
+	return nil
+}
+
+func (s *Store) ensureTrackingEventLocationColumn(ctx context.Context) error {
+	var count int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('tracking_events') WHERE name = 'location'`).Scan(&count); err != nil {
+		return fmt.Errorf("inspect tracking events schema: %w", err)
+	}
+	if count == 0 {
+		if _, err := s.db.ExecContext(ctx, `ALTER TABLE tracking_events ADD COLUMN location TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("add tracking event location: %w", err)
 		}
 	}
 	return nil
@@ -274,7 +296,7 @@ func (s *Store) ListTrackingEvents(ctx context.Context, packageID string) ([]Tra
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT status, sub_status, message, occurred_at
+SELECT status, sub_status, message, location, occurred_at
 FROM tracking_events
 WHERE package_id = ?
 ORDER BY occurred_at DESC, id DESC`, packageID)
@@ -287,7 +309,7 @@ ORDER BY occurred_at DESC, id DESC`, packageID)
 	for rows.Next() {
 		var event TrackingEvent
 		var occurredAt int64
-		if err := rows.Scan(&event.Status, &event.SubStatus, &event.Message, &occurredAt); err != nil {
+		if err := rows.Scan(&event.Status, &event.SubStatus, &event.Message, &event.Location, &occurredAt); err != nil {
 			return nil, fmt.Errorf("scan tracking event: %w", err)
 		}
 		event.OccurredAt = time.Unix(occurredAt, 0).UTC()
@@ -333,6 +355,7 @@ func (s *Store) CreatePackage(ctx context.Context, input NewPackage) (Package, e
 		Status:               input.Status,
 		SubStatus:            input.SubStatus,
 		LatestMessage:        input.LatestMessage,
+		LatestLocation:       input.LatestLocation,
 		LastEventAt:          input.LastEventAt,
 		TrackingError:        input.TrackingError,
 		NotificationsEnabled: true,
@@ -353,8 +376,8 @@ func (s *Store) CreatePackage(ctx context.Context, input NewPackage) (Package, e
 	result, err := tx.ExecContext(ctx, `
 INSERT INTO packages (
     id, description, tracking_number, carrier, tracking_provider, tracking_provider_id, status, sub_status,
-    latest_message, last_event_at, tracking_error, notifications_enabled, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+    latest_message, latest_location, last_event_at, tracking_error, notifications_enabled, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
 ON CONFLICT(tracking_number) DO UPDATE SET
     description = excluded.description,
     carrier = excluded.carrier,
@@ -363,6 +386,7 @@ ON CONFLICT(tracking_number) DO UPDATE SET
     status = excluded.status,
     sub_status = excluded.sub_status,
     latest_message = excluded.latest_message,
+    latest_location = excluded.latest_location,
     last_event_at = excluded.last_event_at,
     tracking_error = excluded.tracking_error,
     notifications_enabled = 1,
@@ -370,7 +394,7 @@ ON CONFLICT(tracking_number) DO UPDATE SET
     updated_at = excluded.updated_at
 WHERE packages.archived = 1`,
 		pkg.ID, pkg.Description, pkg.TrackingNumber, pkg.Carrier, pkg.TrackingProvider, pkg.TrackingProviderID, pkg.Status, pkg.SubStatus,
-		pkg.LatestMessage, lastEventUnix, pkg.TrackingError, now.Unix(), now.Unix(),
+		pkg.LatestMessage, pkg.LatestLocation, lastEventUnix, pkg.TrackingError, now.Unix(), now.Unix(),
 	)
 	if err != nil {
 		return Package{}, fmt.Errorf("create package: %w", err)
@@ -393,7 +417,7 @@ WHERE packages.archived = 1`,
 			}
 		}
 		if err := recordTrackingEvent(ctx, tx, created.ID, TrackingUpdate{
-			Status: created.Status, SubStatus: created.SubStatus, LatestMessage: created.LatestMessage, LastEventAt: created.LastEventAt,
+			Status: created.Status, SubStatus: created.SubStatus, LatestMessage: created.LatestMessage, Location: created.LatestLocation, LastEventAt: created.LastEventAt,
 		}, now); err != nil {
 			return Package{}, err
 		}
@@ -433,7 +457,7 @@ func (s *Store) ArchivePackage(ctx context.Context, id string) error {
 func (s *Store) SetRegistrationError(ctx context.Context, id, carrier, status, trackingError string) error {
 	result, err := s.db.ExecContext(ctx, `
 UPDATE packages SET carrier = ?, tracking_provider = '', tracking_provider_id = '', status = ?, sub_status = '', latest_message = '',
-    last_event_at = NULL, tracking_error = ?, updated_at = ?
+    latest_location = '', last_event_at = NULL, tracking_error = ?, updated_at = ?
 WHERE id = ? AND archived = 0`, carrier, status, trackingError, time.Now().UTC().Unix(), id)
 	if err != nil {
 		return fmt.Errorf("set package registration error: %w", err)
@@ -468,7 +492,7 @@ func (s *Store) UpdateTracking(ctx context.Context, trackingNumber, carrier stri
 	} else if update.Provider != "" {
 		eventChanged = pkg.LastEventAt != nil
 	}
-	changed := pkg.Status != update.Status || pkg.SubStatus != update.SubStatus || pkg.LatestMessage != update.LatestMessage || eventChanged
+	changed := pkg.Status != update.Status || pkg.SubStatus != update.SubStatus || pkg.LatestMessage != update.LatestMessage || pkg.LatestLocation != update.Location || eventChanged
 	now := time.Now().UTC().Truncate(time.Second)
 	if carrier != "" {
 		pkg.Carrier = carrier
@@ -480,6 +504,7 @@ func (s *Store) UpdateTracking(ctx context.Context, trackingNumber, carrier stri
 	pkg.Status = update.Status
 	pkg.SubStatus = update.SubStatus
 	pkg.LatestMessage = update.LatestMessage
+	pkg.LatestLocation = update.Location
 	if update.LastEventAt != nil || update.Provider != "" {
 		pkg.LastEventAt = update.LastEventAt
 	}
@@ -492,15 +517,15 @@ func (s *Store) UpdateTracking(ctx context.Context, trackingNumber, carrier stri
 	}
 	if _, err := tx.ExecContext(ctx, `
 UPDATE packages SET carrier = ?, tracking_provider = ?, tracking_provider_id = ?, status = ?, sub_status = ?, latest_message = ?,
-    last_event_at = ?, tracking_error = '', updated_at = ? WHERE id = ?`,
-		pkg.Carrier, pkg.TrackingProvider, pkg.TrackingProviderID, pkg.Status, pkg.SubStatus, pkg.LatestMessage, eventUnix, now.Unix(), pkg.ID,
+    latest_location = ?, last_event_at = ?, tracking_error = '', updated_at = ? WHERE id = ?`,
+		pkg.Carrier, pkg.TrackingProvider, pkg.TrackingProviderID, pkg.Status, pkg.SubStatus, pkg.LatestMessage, pkg.LatestLocation, eventUnix, now.Unix(), pkg.ID,
 	); err != nil {
 		return Package{}, false, fmt.Errorf("update tracking: %w", err)
 	}
 
 	if changed {
 		if err := recordTrackingEvent(ctx, tx, pkg.ID, TrackingUpdate{
-			Status: pkg.Status, SubStatus: pkg.SubStatus, LatestMessage: pkg.LatestMessage, LastEventAt: update.LastEventAt,
+			Status: pkg.Status, SubStatus: pkg.SubStatus, LatestMessage: pkg.LatestMessage, Location: pkg.LatestLocation, LastEventAt: update.LastEventAt,
 		}, now); err != nil {
 			return Package{}, false, err
 		}
@@ -522,8 +547,11 @@ func recordTrackingEvent(ctx context.Context, executor queryExecutor, packageID 
 		occurredAt = update.LastEventAt.UTC()
 	}
 	_, err := executor.ExecContext(ctx, `
-INSERT OR IGNORE INTO tracking_events (package_id, status, sub_status, message, occurred_at, created_at)
-VALUES (?, ?, ?, ?, ?, ?)`, packageID, update.Status, update.SubStatus, update.LatestMessage, occurredAt.Unix(), fallback.Unix())
+INSERT INTO tracking_events (package_id, status, sub_status, message, location, occurred_at, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(package_id, status, sub_status, message, occurred_at) DO UPDATE SET
+    location = excluded.location WHERE excluded.location <> ''`,
+		packageID, update.Status, update.SubStatus, update.LatestMessage, update.Location, occurredAt.Unix(), fallback.Unix())
 	if err != nil {
 		return fmt.Errorf("record tracking event: %w", err)
 	}
@@ -772,7 +800,7 @@ func scanPackage(row scanner) (Package, error) {
 	var created, updated int64
 	if err := row.Scan(
 		&pkg.ID, &pkg.Description, &pkg.TrackingNumber, &pkg.Carrier, &pkg.TrackingProvider, &pkg.TrackingProviderID, &pkg.Status,
-		&pkg.SubStatus, &pkg.LatestMessage, &lastEvent, &pkg.TrackingError,
+		&pkg.SubStatus, &pkg.LatestMessage, &pkg.LatestLocation, &lastEvent, &pkg.TrackingError,
 		&notifications, &archived, &created, &updated,
 	); err != nil {
 		return Package{}, err

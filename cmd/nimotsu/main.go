@@ -177,6 +177,7 @@ func reconcileTracking(ctx context.Context, dataStore *store.Store, provider tra
 			Status:        status,
 			SubStatus:     registration.SubStatus,
 			LatestMessage: registration.LatestMessage,
+			Location:      registration.Location,
 			LastEventAt:   registration.LastEventAt,
 		})
 		if err != nil {
@@ -186,11 +187,11 @@ func reconcileTracking(ctx context.Context, dataStore *store.Store, provider tra
 		events := make([]store.TrackingUpdate, 0, len(registration.History)+1)
 		for _, event := range registration.History {
 			events = append(events, store.TrackingUpdate{
-				Status: event.Status, SubStatus: event.SubStatus, LatestMessage: event.LatestMessage, LastEventAt: event.LastEventAt,
+				Status: event.Status, SubStatus: event.SubStatus, LatestMessage: event.LatestMessage, Location: event.Location, LastEventAt: event.LastEventAt,
 			})
 		}
 		events = append(events, store.TrackingUpdate{
-			Status: registration.Status, SubStatus: registration.SubStatus, LatestMessage: registration.LatestMessage, LastEventAt: registration.LastEventAt,
+			Status: registration.Status, SubStatus: registration.SubStatus, LatestMessage: registration.LatestMessage, Location: registration.Location, LastEventAt: registration.LastEventAt,
 		})
 		if err := dataStore.RecordTrackingEvents(ctx, updated.ID, events); err != nil {
 			logger.Error("save reconciled tracking history", "package_id", pkg.ID, "error", err)

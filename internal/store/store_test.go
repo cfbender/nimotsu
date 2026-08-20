@@ -119,13 +119,17 @@ func TestTrackingEventsPersistRegistrationHistory(t *testing.T) {
 		TrackingProviderID: "track-1",
 		Status:             "InTransit",
 		LatestMessage:      "Departed facility",
+		LatestLocation:     "Los Angeles, CA 90001, US",
 		LastEventAt:        &currentAt,
 		Events: []TrackingUpdate{{
-			Status: "PreTransit", LatestMessage: "Label created", LastEventAt: &labelAt,
+			Status: "PreTransit", LatestMessage: "Label created", Location: "Phoenix, AZ 85001, US", LastEventAt: &labelAt,
 		}},
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if pkg.LatestLocation != "Los Angeles, CA 90001, US" {
+		t.Fatalf("latest location = %q", pkg.LatestLocation)
 	}
 	assertEvents := func(want int) {
 		t.Helper()
@@ -133,7 +137,7 @@ func TestTrackingEventsPersistRegistrationHistory(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(events) != want || events[0].Status != "InTransit" || events[1].Status != "PreTransit" || !events[1].OccurredAt.Equal(labelAt) {
+		if len(events) != want || events[0].Status != "InTransit" || events[0].Location != "Los Angeles, CA 90001, US" || events[1].Status != "PreTransit" || events[1].Location != "Phoenix, AZ 85001, US" || !events[1].OccurredAt.Equal(labelAt) {
 			t.Fatalf("events = %+v", events)
 		}
 	}

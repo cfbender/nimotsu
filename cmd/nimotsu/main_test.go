@@ -44,8 +44,9 @@ func reconciliationRegistration(number string) tracking.Registration {
 		Carrier:        "USPS",
 		Status:         "InTransit",
 		LatestMessage:  "Moving through network",
+		Location:       "Los Angeles, CA 90001, US",
 		LastEventAt:    &eventAt,
-	}, History: []tracking.Update{{Status: "PreTransit", LatestMessage: "Label created", LastEventAt: &historyAt}}}
+	}, History: []tracking.Update{{Status: "PreTransit", LatestMessage: "Label created", Location: "Phoenix, AZ 85001, US", LastEventAt: &historyAt}}}
 }
 
 func (*reconciliationProvider) ParseWebhook(_ *http.Request, _ []byte) (tracking.Update, error) {
@@ -75,14 +76,14 @@ func TestReconcileTrackingRegistersExistingFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(packages) != 1 || packages[0].Status != "InTransit" || packages[0].Carrier != "USPS" || packages[0].TrackingProvider != "test-provider" || packages[0].TrackingProviderID != "trk_123" || packages[0].TrackingError != "" || provider.registerCalls != 1 || provider.lookupCalls != 1 {
+	if len(packages) != 1 || packages[0].Status != "InTransit" || packages[0].Carrier != "USPS" || packages[0].LatestLocation != "Los Angeles, CA 90001, US" || packages[0].TrackingProvider != "test-provider" || packages[0].TrackingProviderID != "trk_123" || packages[0].TrackingError != "" || provider.registerCalls != 1 || provider.lookupCalls != 1 {
 		t.Fatalf("reconciled packages = %+v", packages)
 	}
 	events, err := dataStore.ListTrackingEvents(t.Context(), packages[0].ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 2 || events[0].Status != "InTransit" || events[1].Status != "PreTransit" {
+	if len(events) != 2 || events[0].Status != "InTransit" || events[0].Location != "Los Angeles, CA 90001, US" || events[1].Status != "PreTransit" || events[1].Location != "Phoenix, AZ 85001, US" {
 		t.Fatalf("tracking events = %+v", events)
 	}
 }

@@ -169,6 +169,7 @@ func (s *Server) savePackage(ctx context.Context, description, trackingNumber, r
 			Status:        event.Status,
 			SubStatus:     event.SubStatus,
 			LatestMessage: event.LatestMessage,
+			Location:      event.Location,
 			LastEventAt:   event.LastEventAt,
 		})
 	}
@@ -181,6 +182,7 @@ func (s *Server) savePackage(ctx context.Context, description, trackingNumber, r
 		Status:             status,
 		SubStatus:          registration.SubStatus,
 		LatestMessage:      registration.LatestMessage,
+		LatestLocation:     registration.Location,
 		LastEventAt:        registration.LastEventAt,
 		TrackingError:      trackingError,
 		Events:             events,
@@ -419,6 +421,7 @@ func (s *Server) trackingWebhook(w http.ResponseWriter, r *http.Request) {
 		Status:        update.Status,
 		SubStatus:     update.SubStatus,
 		LatestMessage: update.LatestMessage,
+		Location:      update.Location,
 		LastEventAt:   update.LastEventAt,
 	})
 	if errors.Is(err, sql.ErrNoRows) {
@@ -525,6 +528,9 @@ func NotificationText(pkg store.Package) (string, string) {
 	body := pkg.LatestMessage
 	if body == "" {
 		body = "Tracking status changed to " + formatStatus(pkg.Status)
+	}
+	if pkg.LatestLocation != "" {
+		body += " · " + pkg.LatestLocation
 	}
 	return title, body
 }

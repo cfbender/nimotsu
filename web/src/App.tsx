@@ -151,7 +151,10 @@ export default function App() {
                           <h2>{pkg.description}</h2>
                           <span className="status-pill">{formatStatus(pkg.status)}</span>
                         </div>
-                        <p className="latest-message">{pkg.latest_message || pkg.tracking_error || 'Waiting for a tracking update'}</p>
+                        <p className="latest-message">
+                          {pkg.latest_message || pkg.tracking_error || 'Waiting for a tracking update'}
+                          {pkg.latest_location && <span className="latest-location"><LocationIcon />{pkg.latest_location}</span>}
+                        </p>
                         <div className="package-meta">
                           <span>{pkg.tracking_number}</span>
                           {pkg.carrier && <><span aria-hidden="true">·</span><span>{formatCarrier(pkg.carrier)}</span></>}
@@ -255,7 +258,10 @@ function PackageDetailSheet({
         <div>
           <span className="status-pill">{formatStatus(pkg.status)}</span>
           <h3>{pkg.description}</h3>
-          <p>{pkg.latest_message || pkg.tracking_error || 'Waiting for a tracking update'}</p>
+          <p>
+            {pkg.latest_message || pkg.tracking_error || 'Waiting for a tracking update'}
+            {pkg.latest_location && <span className="latest-location"><LocationIcon />{pkg.latest_location}</span>}
+          </p>
         </div>
       </div>
 
@@ -291,6 +297,7 @@ function PackageDetailSheet({
                 <div className="timeline-copy">
                   <div><strong>{formatStatus(event.sub_status || event.status)}</strong><time dateTime={event.occurred_at}>{formatEventDate(event.occurred_at)}</time></div>
                   <p>{event.message || (event.sub_status ? formatStatus(event.sub_status) : formatStatus(event.status))}</p>
+                  {event.location && <span className="timeline-location"><LocationIcon />{event.location}</span>}
                 </div>
               </li>
             ))}
@@ -705,6 +712,10 @@ function ChevronIcon() {
 
 function ClockIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>
+}
+
+function LocationIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z" /><circle cx="12" cy="10" r="2.5" /></svg>
 }
 
 function ArchiveIcon() {

@@ -34,8 +34,8 @@ func TestRegisterDetectsCarrierAndCreatesTrackingRegistration(t *testing.T) {
 		response.Header().Set("Content-Type", "application/json")
 		_, _ = response.Write([]byte(`{
   "carrier":"usps","tracking_number":"9400110898825022579493",
-  "tracking_status":{"status":"TRANSIT","status_details":"Moving through network","status_date":"2026-08-20T12:00:00Z","substatus":{"code":"departed_facility","text":"Departed facility","action_required":false}},
-  "tracking_history":[{"status":"PRE_TRANSIT","status_details":"Label created","status_date":"2026-08-19T10:00:00Z","substatus":{"code":"information_received","text":"Information received"}}],"messages":[]
+  "tracking_status":{"status":"TRANSIT","status_details":"Moving through network","status_date":"2026-08-20T12:00:00Z","substatus":{"code":"departed_facility","text":"Departed facility","action_required":false},"location":{"city":"Los Angeles","state":"CA","zip":"90001","country":"US"}},
+  "tracking_history":[{"status":"PRE_TRANSIT","status_details":"Label created","status_date":"2026-08-19T10:00:00Z","substatus":{"code":"information_received","text":"Information received"},"location":{"city":"Phoenix","state":"AZ","zip":"85001","country":"US"}}],"messages":[]
 }`))
 	}))
 	defer server.Close()
@@ -49,10 +49,10 @@ func TestRegisterDetectsCarrierAndCreatesTrackingRegistration(t *testing.T) {
 	if registration.ProviderID != "usps:9400110898825022579493" || registration.Carrier != "usps" || registration.Status != "InTransit" {
 		t.Fatalf("registration = %+v", registration)
 	}
-	if registration.SubStatus != "DepartedFacility" || registration.LatestMessage != "Moving through network" {
+	if registration.SubStatus != "DepartedFacility" || registration.LatestMessage != "Moving through network" || registration.Location != "Los Angeles, CA 90001, US" {
 		t.Fatalf("registration update = %+v", registration.Update)
 	}
-	if len(registration.History) != 1 || registration.History[0].Status != "PreTransit" || registration.History[0].LatestMessage != "Label created" {
+	if len(registration.History) != 1 || registration.History[0].Status != "PreTransit" || registration.History[0].LatestMessage != "Label created" || registration.History[0].Location != "Phoenix, AZ 85001, US" {
 		t.Fatalf("registration history = %+v", registration.History)
 	}
 	if registration.LastEventAt == nil || !registration.LastEventAt.Equal(time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)) {
@@ -131,7 +131,7 @@ func TestRegisterReturnsShippoErrors(t *testing.T) {
 }
 
 func TestParseWebhookAuthenticatesTokenAndNormalizesUpdate(t *testing.T) {
-	body := []byte(`{"event":"track_updated","test":false,"data":{"carrier":"usps","tracking_number":"9400110898825022579493","tracking_status":{"status":"TRANSIT","status_details":"Out for delivery","status_date":"2026-08-20T14:30:00Z","substatus":{"code":"out_for_delivery","text":"Out for delivery","action_required":false}},"tracking_history":[],"messages":[]}}`)
+	body := []byte(`{"event":"track_updated","test":false,"data":{"carrier":"usps","tracking_number":"9400110898825022579493","tracking_status":{"status":"TRANSIT","status_details":"Out for delivery","status_date":"2026-08-20T14:30:00Z","substatus":{"code":"out_for_delivery","text":"Out for delivery","action_required":false},"location":{"city":"Portland","state":"OR","zip":"97201","country":"US"}},"tracking_history":[],"messages":[]}}`)
 	request := httptest.NewRequest(http.MethodPost, "/api/webhooks/tracking?token=webhook-token", strings.NewReader(string(body)))
 	client := New("test-token", "webhook-token")
 
@@ -142,7 +142,7 @@ func TestParseWebhookAuthenticatesTokenAndNormalizesUpdate(t *testing.T) {
 	if update.TrackingNumber != "9400110898825022579493" || update.Carrier != "usps" || update.Status != "OutForDelivery" || update.SubStatus != "OutForDelivery" {
 		t.Fatalf("update = %+v", update)
 	}
-	if update.LatestMessage != "Out for delivery" || update.LastEventAt == nil {
+	if update.LatestMessage != "Out for delivery" || update.Location != "Portland, OR 97201, US" || update.LastEventAt == nil {
 		t.Fatalf("update details = %+v", update)
 	}
 }
