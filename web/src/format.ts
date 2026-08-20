@@ -30,10 +30,31 @@ export function formatCarrier(carrier: string): string {
     usps: 'USPS',
     ups: 'UPS',
     fedex: 'FedEx',
+    fedex_smartpost: 'FedEx Ground Economy',
     dhl_express: 'DHL Express',
+    dhl_ecommerce: 'DHL eCommerce',
+    ups_mail_innovations: 'UPS Mail Innovations',
+    ontrac: 'OnTrac',
+    lasership: 'LaserShip',
+    gls_us: 'GLS US',
+    canada_post: 'Canada Post',
+    royal_mail: 'Royal Mail',
+    australia_post: 'Australia Post',
+    amazon: 'Amazon Shipping',
+    amazon_mws: 'Amazon Shipping',
     shippo: 'Shippo',
   }
   return known[carrier.toLowerCase()] ?? carrier.replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
+}
+
+export function formatEventDate(value: string): string {
+  return new Date(value).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: new Date(value).getFullYear() === new Date().getFullYear() ? undefined : 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
 }
 
 export function formatRelativeDate(value: string | null): string {

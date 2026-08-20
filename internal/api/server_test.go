@@ -35,10 +35,21 @@ func (f *fakeProvider) Name() string {
 	return "fake"
 }
 
+func (f *fakeProvider) DetectCarrier(number string) string {
+	if number == "1Z999AA10123456784" {
+		return "ups"
+	}
+	return ""
+}
+
 func (f *fakeProvider) Register(_ context.Context, number, carrier string) (tracking.Registration, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.registerCalls = append(f.registerCalls, trackingRequest{number: number, carrier: carrier})
+	return f.registration, f.registrationErr
+}
+
+func (f *fakeProvider) Lookup(context.Context, string, string) (tracking.Registration, error) {
 	return f.registration, f.registrationErr
 }
 
@@ -86,6 +97,9 @@ func TestCreateAndRestorePackageRegistersWithProvider(t *testing.T) {
 	if created.Code != http.StatusCreated {
 		t.Fatalf("create status = %d, body = %s", created.Code, created.Body.String())
 	}
+	if bytes.Contains(created.Body.Bytes(), []byte("tracking_provider")) {
+		t.Fatalf("create response exposes provider fields: %s", created.Body.String())
+	}
 	var original store.Package
 	if err := json.Unmarshal(created.Body.Bytes(), &original); err != nil {
 		t.Fatal(err)
@@ -122,6 +136,64 @@ func TestCreateAndRestorePackageRegistersWithProvider(t *testing.T) {
 	defer provider.mu.Unlock()
 	if provider.registerCalls[0].carrier != "USPS" || provider.registerCalls[1].carrier != "" {
 		t.Fatalf("registration calls = %+v", provider.registerCalls)
+	}
+}
+
+func TestPackageTrackingEventsAndCarrierDetection(t *testing.T) {
+	dataStore := openTestStore(t)
+	currentAt := time.Date(2026, 8, 20, 14, 30, 0, 0, time.UTC)
+	registeredAt := currentAt.Add(-24 * time.Hour)
+	provider := &fakeProvider{registration: tracking.Registration{
+		ProviderID: "trk_123",
+		Update: tracking.Update{
+			Carrier:       "UPS",
+			Status:        "InTransit",
+			LatestMessage: "Departed facility",
+			LastEventAt:   &currentAt,
+		},
+		History: []tracking.Update{{
+			Status:        "PreTransit",
+			LatestMessage: "Label created",
+			LastEventAt:   &registeredAt,
+		}},
+	}}
+	handler := New(dataStore, provider, nil, "", nil, testLogger())
+
+	carrierRequest := httptest.NewRequest(http.MethodGet, "/api/tracking/carrier?tracking_number=1Z999AA10123456784", nil)
+	carrierResponse := httptest.NewRecorder()
+	handler.ServeHTTP(carrierResponse, carrierRequest)
+	if carrierResponse.Code != http.StatusOK || carrierResponse.Body.String() != "{\"carrier\":\"ups\"}\n" {
+		t.Fatalf("carrier response = %d %s", carrierResponse.Code, carrierResponse.Body.String())
+	}
+
+	created := postJSON(handler, "/api/packages", `{"description":"Headphones","tracking_number":"1Z999AA10123456784"}`)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, body = %s", created.Code, created.Body.String())
+	}
+	var pkg store.Package
+	if err := json.Unmarshal(created.Body.Bytes(), &pkg); err != nil {
+		t.Fatal(err)
+	}
+
+	eventsRequest := httptest.NewRequest(http.MethodGet, "/api/packages/"+pkg.ID+"/events", nil)
+	eventsResponse := httptest.NewRecorder()
+	handler.ServeHTTP(eventsResponse, eventsRequest)
+	if eventsResponse.Code != http.StatusOK {
+		t.Fatalf("events status = %d, body = %s", eventsResponse.Code, eventsResponse.Body.String())
+	}
+	var events []store.TrackingEvent
+	if err := json.Unmarshal(eventsResponse.Body.Bytes(), &events); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[0].Status != "InTransit" || events[1].Status != "PreTransit" || !events[1].OccurredAt.Equal(registeredAt) {
+		t.Fatalf("events = %+v", events)
+	}
+
+	missingRequest := httptest.NewRequest(http.MethodGet, "/api/packages/missing/events", nil)
+	missingResponse := httptest.NewRecorder()
+	handler.ServeHTTP(missingResponse, missingRequest)
+	if missingResponse.Code != http.StatusNotFound {
+		t.Fatalf("missing events status = %d, body = %s", missingResponse.Code, missingResponse.Body.String())
 	}
 }
 

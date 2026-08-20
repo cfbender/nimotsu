@@ -103,6 +103,59 @@ func TestPackageLifecycle(t *testing.T) {
 	}
 }
 
+func TestTrackingEventsPersistRegistrationHistory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nimotsu.db")
+	dataStore, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentAt := time.Date(2026, time.August, 20, 12, 0, 0, 0, time.UTC)
+	labelAt := currentAt.Add(-24 * time.Hour)
+	pkg, err := dataStore.CreatePackage(t.Context(), NewPackage{
+		Description:        "Headphones",
+		TrackingNumber:     "1Z999AA10123456784",
+		Carrier:            "ups",
+		TrackingProvider:   "shippo",
+		TrackingProviderID: "track-1",
+		Status:             "InTransit",
+		LatestMessage:      "Departed facility",
+		LastEventAt:        &currentAt,
+		Events: []TrackingUpdate{{
+			Status: "PreTransit", LatestMessage: "Label created", LastEventAt: &labelAt,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertEvents := func(want int) {
+		t.Helper()
+		events, err := dataStore.ListTrackingEvents(t.Context(), pkg.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(events) != want || events[0].Status != "InTransit" || events[1].Status != "PreTransit" || !events[1].OccurredAt.Equal(labelAt) {
+			t.Fatalf("events = %+v", events)
+		}
+	}
+	assertEvents(2)
+	if err := dataStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	dataStore, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dataStore.Close()
+	assertEvents(2)
+	if err := dataStore.ArchivePackage(t.Context(), pkg.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dataStore.ListTrackingEvents(t.Context(), pkg.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("archived package history error = %v, want sql.ErrNoRows", err)
+	}
+}
+
 func TestOpenMigratesExistingPackageCarrier(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nimotsu.db")
 	database, err := sql.Open("sqlite", path)

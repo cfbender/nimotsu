@@ -17,6 +17,8 @@ describe('formatStatus', () => {
   it('formats Shippo carrier tokens', () => {
     expect(formatCarrier('usps')).toBe('USPS')
     expect(formatCarrier('dhl_express')).toBe('DHL Express')
+    expect(formatCarrier('dhl_ecommerce')).toBe('DHL eCommerce')
+    expect(formatCarrier('fedex_smartpost')).toBe('FedEx Ground Economy')
     expect(formatCarrier('canada_post')).toBe('Canada Post')
   })
 })

@@ -18,6 +18,13 @@ export interface TrackedPackage {
   updated_at: string
 }
 
+export interface TrackingEvent {
+  status: string
+  sub_status: string
+  message: string
+  occurred_at: string
+}
+
 export interface ConnectionSettings {
   serverURL: string
   apiToken: string
@@ -60,6 +67,16 @@ export function saveConnectionSettings(settings: ConnectionSettings): void {
 
 export async function listPackages(): Promise<TrackedPackage[]> {
   return request<TrackedPackage[]>('/api/packages')
+}
+
+export async function listTrackingEvents(id: string): Promise<TrackingEvent[]> {
+  return request<TrackingEvent[]>(`/api/packages/${id}/events`)
+}
+
+export async function detectCarrier(trackingNumber: string): Promise<string> {
+  const params = new URLSearchParams({ tracking_number: trackingNumber })
+  const response = await request<{ carrier: string }>(`/api/tracking/carrier?${params}`)
+  return response.carrier
 }
 
 export async function addPackage(input: {

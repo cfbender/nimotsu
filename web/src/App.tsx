@@ -5,6 +5,7 @@ import {
   addPackage,
   archivePackage,
   beginGmailOAuth,
+  detectCarrier,
   disconnectGmail,
   dismissEmailCandidate,
   getConnectionSettings,
@@ -12,14 +13,16 @@ import {
   isNative,
   listEmailCandidates,
   listPackages,
+  listTrackingEvents,
   saveConnectionSettings,
   setPackageNotifications,
   syncGmail,
   type EmailCandidate,
   type GmailStatus,
+  type TrackingEvent,
   type TrackedPackage,
 } from './api'
-import { formatCarrier, formatRelativeDate, formatStatus } from './format'
+import { formatCarrier, formatEventDate, formatRelativeDate, formatStatus } from './format'
 import { enablePushNotifications } from './push'
 import { getThemeMode, saveThemeMode, type ThemeMode } from './theme'
 
@@ -33,6 +36,9 @@ export default function App() {
   const [sheet, setSheet] = useState<Sheet>(
     (isNative() && !getConnectionSettings().serverURL) || new URLSearchParams(window.location.search).has('gmail') ? 'settings' : null,
   )
+  const [selectedPackage, setSelectedPackage] = useState<TrackedPackage | null>(null)
+  const [archiveTarget, setArchiveTarget] = useState<TrackedPackage | null>(null)
+  const [archiving, setArchiving] = useState(false)
   const [connectionVersion, setConnectionVersion] = useState(0)
 
   const loadData = useCallback(async () => {
@@ -41,6 +47,7 @@ export default function App() {
     try {
       const [nextPackages, nextCandidates] = await Promise.all([listPackages(), listEmailCandidates()])
       setPackages(nextPackages)
+      setSelectedPackage((current) => current ? nextPackages.find((pkg) => pkg.id === current.id) ?? null : null)
       setCandidates(nextCandidates)
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Could not load deliveries')
@@ -60,18 +67,23 @@ export default function App() {
     try {
       const updated = await setPackageNotifications(pkg.id, !pkg.notifications_enabled)
       setPackages((current) => current.map((item) => (item.id === updated.id ? updated : item)))
+      setSelectedPackage((current) => current?.id === updated.id ? updated : current)
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Could not update notifications')
     }
   }
 
   async function removePackage(pkg: TrackedPackage) {
-    if (!window.confirm(`Archive “${pkg.description}”?`)) return
+    setArchiving(true)
     try {
       await archivePackage(pkg.id)
       setPackages((current) => current.filter((item) => item.id !== pkg.id))
+      setSelectedPackage((current) => current?.id === pkg.id ? null : current)
+      setArchiveTarget(null)
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Could not archive package')
+    } finally {
+      setArchiving(false)
     }
   }
 
@@ -132,7 +144,7 @@ export default function App() {
               <section className="package-list" aria-label="Packages">
                 {packages.map((pkg) => (
                   <article className={`package-card status-${pkg.status.toLowerCase()}`} key={pkg.id}>
-                    <div className="package-card-main">
+                    <button className="package-card-main package-open" type="button" onClick={() => setSelectedPackage(pkg)} aria-label={`View details for ${pkg.description}`}>
                       <div className="status-mark"><PackageIcon /></div>
                       <div className="package-copy">
                         <div className="package-heading">
@@ -146,13 +158,14 @@ export default function App() {
                           <span className="package-update"><span aria-hidden="true">·</span> {formatRelativeDate(pkg.last_event_at)}</span>
                         </div>
                       </div>
-                    </div>
+                      <ChevronIcon />
+                    </button>
                     <div className="card-actions">
                       <button type="button" onClick={() => void toggleNotifications(pkg)} aria-pressed={pkg.notifications_enabled}>
                         <BellIcon enabled={pkg.notifications_enabled} />
                         {pkg.notifications_enabled ? 'Updates on' : 'Updates off'}
                       </button>
-                      <button className="danger-action" type="button" onClick={() => void removePackage(pkg)}>Archive</button>
+                      <button className="danger-action" type="button" onClick={() => setArchiveTarget(pkg)}>Archive</button>
                     </div>
                   </article>
                 ))}
@@ -162,7 +175,7 @@ export default function App() {
         )}
       </main>
 
-      {packages.length > 0 && !sheet && (
+      {packages.length > 0 && !sheet && !selectedPackage && !archiveTarget && (
         <button className="floating-button" type="button" onClick={() => setSheet('add')} aria-label="Add package">
           <PlusIcon />
         </button>
@@ -187,7 +200,104 @@ export default function App() {
           }}
         />
       )}
+      {selectedPackage && (
+        <PackageDetailSheet
+          pkg={selectedPackage}
+          onClose={() => setSelectedPackage(null)}
+          onToggleNotifications={() => void toggleNotifications(selectedPackage)}
+          onArchive={() => setArchiveTarget(selectedPackage)}
+        />
+      )}
+      {archiveTarget && (
+        <ConfirmDialog
+          title="Archive package?"
+          message={`“${archiveTarget.description}” will be removed from your active deliveries. You can add the tracking number again later.`}
+          confirmLabel={archiving ? 'Archiving…' : 'Archive package'}
+          busy={archiving}
+          onCancel={() => setArchiveTarget(null)}
+          onConfirm={() => void removePackage(archiveTarget)}
+        />
+      )}
     </div>
+  )
+}
+
+function PackageDetailSheet({
+  pkg,
+  onClose,
+  onToggleNotifications,
+  onArchive,
+}: {
+  pkg: TrackedPackage
+  onClose: () => void
+  onToggleNotifications: () => void
+  onArchive: () => void
+}) {
+  const [events, setEvents] = useState<TrackingEvent[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let active = true
+    setLoading(true)
+    setError('')
+    void listTrackingEvents(pkg.id)
+      .then((nextEvents) => active && setEvents(nextEvents))
+      .catch((requestError) => active && setError(requestError instanceof Error ? requestError.message : 'Could not load tracking history'))
+      .finally(() => active && setLoading(false))
+    return () => { active = false }
+  }, [pkg.id])
+
+  return (
+    <Sheet title="Shipment details" onClose={onClose}>
+      <div className={`detail-hero status-${pkg.status.toLowerCase()}`}>
+        <div className="detail-status-mark"><PackageIcon /></div>
+        <div>
+          <span className="status-pill">{formatStatus(pkg.status)}</span>
+          <h3>{pkg.description}</h3>
+          <p>{pkg.latest_message || pkg.tracking_error || 'Waiting for a tracking update'}</p>
+        </div>
+      </div>
+
+      <dl className="shipment-facts">
+        <div><dt>Carrier</dt><dd>{pkg.carrier ? formatCarrier(pkg.carrier) : 'Not detected'}</dd></div>
+        <div><dt>Tracking number</dt><dd>{pkg.tracking_number}</dd></div>
+      </dl>
+
+      <div className="detail-actions">
+        <button className="secondary-button" type="button" aria-pressed={pkg.notifications_enabled} onClick={onToggleNotifications}>
+          <BellIcon enabled={pkg.notifications_enabled} />
+          {pkg.notifications_enabled ? 'Updates on' : 'Updates off'}
+        </button>
+        <button className="text-button danger-action" type="button" onClick={onArchive}>Archive</button>
+      </div>
+
+      <section className="history-section" aria-labelledby="history-heading">
+        <div className="history-heading">
+          <div><p className="eyebrow">Tracking activity</p><h3 id="history-heading">Update history</h3></div>
+          {!loading && <span>{events.length}</span>}
+        </div>
+        {loading ? (
+          <div className="history-loading" aria-label="Loading tracking history"><span /><span /><span /></div>
+        ) : error ? (
+          <p className="form-error" role="alert">{error}</p>
+        ) : events.length === 0 ? (
+          <div className="history-empty"><ClockIcon /><p>No carrier scans yet. New updates will appear here.</p></div>
+        ) : (
+          <ol className="tracking-timeline">
+            {events.map((event, index) => (
+              <li key={`${event.occurred_at}-${event.status}-${event.sub_status}-${index}`}>
+                <span className="timeline-dot" aria-hidden="true" />
+                <div className="timeline-copy">
+                  <div><strong>{formatStatus(event.sub_status || event.status)}</strong><time dateTime={event.occurred_at}>{formatEventDate(event.occurred_at)}</time></div>
+                  <p>{event.message || (event.sub_status ? formatStatus(event.sub_status) : formatStatus(event.status))}</p>
+                </div>
+              </li>
+            ))}
+          </ol>
+        )}
+      </section>
+    </Sheet>
   )
 }
 
@@ -248,8 +358,36 @@ function AddPackageSheet({ onClose, onAdded }: { onClose: () => void; onAdded: (
   const [description, setDescription] = useState('')
   const [trackingNumber, setTrackingNumber] = useState('')
   const [carrier, setCarrier] = useState('')
+  const [carrierSource, setCarrierSource] = useState<'auto' | 'manual'>('auto')
+  const [carrierDetection, setCarrierDetection] = useState<'checking' | 'detected' | ''>('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    const normalized = trackingNumber.trim()
+    if (carrierSource === 'manual') return
+    if (normalized.length < 5) {
+      setCarrier('')
+      setCarrierDetection('')
+      return
+    }
+
+    let active = true
+    setCarrierDetection('checking')
+    const timeout = window.setTimeout(() => {
+      void detectCarrier(normalized)
+        .then((detected) => {
+          if (!active) return
+          setCarrier(detected)
+          setCarrierDetection(detected ? 'detected' : '')
+        })
+        .catch(() => active && setCarrierDetection(''))
+    }, 250)
+    return () => {
+      active = false
+      window.clearTimeout(timeout)
+    }
+  }, [carrierSource, trackingNumber])
 
   async function submit(event: FormEvent) {
     event.preventDefault()
@@ -278,18 +416,33 @@ function AddPackageSheet({ onClose, onAdded }: { onClose: () => void; onAdded: (
         </label>
         <label>
           Tracking number
-          <input required autoCapitalize="characters" value={trackingNumber} onChange={(event) => setTrackingNumber(event.target.value)} placeholder="1Z999AA10123456784" />
+          <input required autoCapitalize="characters" autoComplete="off" spellCheck={false} value={trackingNumber} onChange={(event) => setTrackingNumber(event.target.value.toUpperCase().replace(/\s/g, ''))} placeholder="1Z999AA10123456784" />
         </label>
         <label>
           Carrier <span className="optional">optional</span>
-          <input list="carrier-options" value={carrier} onChange={(event) => setCarrier(event.target.value)} placeholder="Auto-detect" />
+          <input
+            list="carrier-options"
+            value={carrier}
+            onChange={(event) => {
+              setCarrier(event.target.value)
+              setCarrierSource(event.target.value.trim() ? 'manual' : 'auto')
+              setCarrierDetection('')
+            }}
+            placeholder="Detected as you type"
+          />
           <datalist id="carrier-options">
             <option value="usps">USPS</option>
             <option value="ups">UPS</option>
             <option value="fedex">FedEx</option>
             <option value="dhl_express">DHL Express</option>
           </datalist>
-          <span className="field-help">Leave blank to detect common carriers, or enter a Shippo carrier token.</span>
+          <span className={`field-help${carrierDetection === 'detected' ? ' detected' : ''}`} aria-live="polite">
+            {carrierDetection === 'checking'
+              ? 'Checking common carrier formats…'
+              : carrierDetection === 'detected'
+                ? `${formatCarrier(carrier)} detected. You can change it if needed.`
+                : 'Common carriers are detected automatically, or you can enter a Shippo carrier token.'}
+          </span>
         </label>
         {error && <p className="form-error" role="alert">{error}</p>}
         <button className="primary-button full-width" disabled={saving} type="submit">{saving ? 'Adding…' : 'Track package'}</button>
@@ -314,6 +467,8 @@ function SettingsSheet({
   const [pushState, setPushState] = useState('')
   const [gmailStatus, setGmailStatus] = useState<GmailStatus | null>(null)
   const [gmailAction, setGmailAction] = useState('')
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false)
+  const [disconnecting, setDisconnecting] = useState(false)
 
   useEffect(() => {
     void refreshGmailStatus()
@@ -381,15 +536,18 @@ function SettingsSheet({
   }
 
   async function removeGmail() {
-    if (!window.confirm('Disconnect Gmail and remove its pending suggestions?')) return
+    setDisconnecting(true)
     setGmailAction('Disconnecting…')
     try {
       await disconnectGmail()
       await refreshGmailStatus()
       setGmailAction('Gmail disconnected')
+      setConfirmDisconnect(false)
       onCandidatesChanged()
     } catch (error) {
       setGmailAction(error instanceof Error ? error.message : 'Could not disconnect Gmail')
+    } finally {
+      setDisconnecting(false)
     }
   }
 
@@ -440,7 +598,7 @@ function SettingsSheet({
             {gmailStatus.sync_error && <p className="form-error" role="alert">{gmailStatus.sync_error}</p>}
             <div className="gmail-actions">
               <button className="secondary-button" type="button" onClick={() => void scanGmail()}>Scan now</button>
-              <button className="text-button danger-action" type="button" onClick={() => void removeGmail()}>Disconnect</button>
+              <button className="text-button danger-action" type="button" onClick={() => setConfirmDisconnect(true)}>Disconnect</button>
             </div>
           </>
         ) : (
@@ -451,17 +609,71 @@ function SettingsSheet({
         )}
         {gmailAction && <p className="push-state" role="status">{gmailAction}</p>}
       </div>
+      {confirmDisconnect && (
+        <ConfirmDialog
+          title="Disconnect Gmail?"
+          message="Nimotsu will remove the connection and pending email suggestions. Your messages remain untouched in Gmail."
+          confirmLabel={disconnecting ? 'Disconnecting…' : 'Disconnect Gmail'}
+          busy={disconnecting}
+          onCancel={() => setConfirmDisconnect(false)}
+          onConfirm={() => void removeGmail()}
+        />
+      )}
     </Sheet>
   )
 }
 
 function Sheet({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !document.querySelector('[role="alertdialog"]')) onClose()
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [onClose])
+
   return (
     <div className="sheet-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
         <div className="sheet-handle" />
         <div className="sheet-heading"><h2 id="sheet-title">{title}</h2><button type="button" onClick={onClose} aria-label="Close"><CloseIcon /></button></div>
         {children}
+      </section>
+    </div>
+  )
+}
+
+function ConfirmDialog({
+  title,
+  message,
+  confirmLabel,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  title: string
+  message: string
+  confirmLabel: string
+  busy: boolean
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => event.key === 'Escape' && !busy && onCancel()
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [busy, onCancel])
+
+  return (
+    <div className="confirm-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !busy && onCancel()}>
+      <section className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-message">
+        <div className="confirm-icon"><ArchiveIcon /></div>
+        <h2 id="confirm-title">{title}</h2>
+        <p id="confirm-message">{message}</p>
+        <div className="confirm-actions">
+          <button autoFocus type="button" disabled={busy} onClick={onCancel}>Cancel</button>
+          <button className="danger-button" type="button" disabled={busy} onClick={onConfirm}>{confirmLabel}</button>
+        </div>
       </section>
     </div>
   )
@@ -485,6 +697,18 @@ function SettingsIcon() {
 
 function PlusIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+}
+
+function ChevronIcon() {
+  return <svg className="chevron-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
+}
+
+function ClockIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>
+}
+
+function ArchiveIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M6 7l1 13h10l1-13M9 4h6l1 3H8zM10 11h4" /></svg>
 }
 
 function CloseIcon() {

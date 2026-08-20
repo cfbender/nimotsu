@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -58,6 +59,10 @@ func (c *Client) Name() string {
 	return "shippo"
 }
 
+func (c *Client) DetectCarrier(trackingNumber string) string {
+	return detectCarrier(trackingNumber)
+}
+
 func (c *Client) Register(ctx context.Context, trackingNumber, carrier string) (tracking.Registration, error) {
 	carrier = normalizeCarrier(carrier)
 	if carrier == "" {
@@ -100,17 +105,52 @@ func (c *Client) Register(ctx context.Context, trackingNumber, carrier string) (
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return tracking.Registration{}, decodeAPIError(response.StatusCode, responseBody)
 	}
+	return decodeRegistration(responseBody)
+}
 
+func (c *Client) Lookup(ctx context.Context, trackingNumber, carrier string) (tracking.Registration, error) {
+	carrier = normalizeCarrier(carrier)
+	if carrier == "" {
+		carrier = detectCarrier(trackingNumber)
+	}
+	if carrier == "" {
+		return tracking.Registration{}, tracking.ErrCarrierRequired
+	}
+	endpoint := strings.TrimRight(c.baseURL, "/") + "/tracks/" + url.PathEscape(carrier) + "/" + url.PathEscape(trackingNumber)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return tracking.Registration{}, fmt.Errorf("create Shippo tracking lookup: %w", err)
+	}
+	request.Header.Set("Authorization", "ShippoToken "+c.apiToken)
+	request.Header.Set("Shippo-API-Version", "2018-02-08")
+
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		return tracking.Registration{}, fmt.Errorf("look up Shippo tracking: %w", err)
+	}
+	defer response.Body.Close()
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	if err != nil {
+		return tracking.Registration{}, fmt.Errorf("read Shippo tracking lookup: %w", err)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return tracking.Registration{}, decodeAPIError(response.StatusCode, responseBody)
+	}
+	return decodeRegistration(responseBody)
+}
+
+func decodeRegistration(responseBody []byte) (tracking.Registration, error) {
 	var track trackPayload
 	if err := json.Unmarshal(responseBody, &track); err != nil {
-		return tracking.Registration{}, fmt.Errorf("decode Shippo tracking registration: %w", err)
+		return tracking.Registration{}, fmt.Errorf("decode Shippo tracking response: %w", err)
 	}
 	if track.TrackingNumber == "" || track.Carrier == "" {
-		return tracking.Registration{}, errors.New("Shippo returned an incomplete tracking registration")
+		return tracking.Registration{}, errors.New("Shippo returned incomplete tracking data")
 	}
 	update := track.update()
 	return tracking.Registration{
 		ProviderID: normalizeCarrier(track.Carrier) + ":" + strings.ToUpper(track.TrackingNumber),
+		History:    track.history(),
 		Update:     update,
 	}, nil
 }
@@ -244,6 +284,18 @@ func (t trackPayload) update() tracking.Update {
 	if latest == nil && len(t.TrackingHistory) > 0 {
 		latest = &t.TrackingHistory[len(t.TrackingHistory)-1]
 	}
+	return t.updateFrom(latest)
+}
+
+func (t trackPayload) history() []tracking.Update {
+	updates := make([]tracking.Update, 0, len(t.TrackingHistory))
+	for index := range t.TrackingHistory {
+		updates = append(updates, t.updateFrom(&t.TrackingHistory[index]))
+	}
+	return updates
+}
+
+func (t trackPayload) updateFrom(latest *trackingStatus) tracking.Update {
 	update := tracking.Update{
 		TrackingNumber: strings.ToUpper(t.TrackingNumber),
 		Carrier:        normalizeCarrier(t.Carrier),

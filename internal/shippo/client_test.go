@@ -35,7 +35,7 @@ func TestRegisterDetectsCarrierAndCreatesTrackingRegistration(t *testing.T) {
 		_, _ = response.Write([]byte(`{
   "carrier":"usps","tracking_number":"9400110898825022579493",
   "tracking_status":{"status":"TRANSIT","status_details":"Moving through network","status_date":"2026-08-20T12:00:00Z","substatus":{"code":"departed_facility","text":"Departed facility","action_required":false}},
-  "tracking_history":[],"messages":[]
+  "tracking_history":[{"status":"PRE_TRANSIT","status_details":"Label created","status_date":"2026-08-19T10:00:00Z","substatus":{"code":"information_received","text":"Information received"}}],"messages":[]
 }`))
 	}))
 	defer server.Close()
@@ -52,8 +52,38 @@ func TestRegisterDetectsCarrierAndCreatesTrackingRegistration(t *testing.T) {
 	if registration.SubStatus != "DepartedFacility" || registration.LatestMessage != "Moving through network" {
 		t.Fatalf("registration update = %+v", registration.Update)
 	}
+	if len(registration.History) != 1 || registration.History[0].Status != "PreTransit" || registration.History[0].LatestMessage != "Label created" {
+		t.Fatalf("registration history = %+v", registration.History)
+	}
 	if registration.LastEventAt == nil || !registration.LastEventAt.Equal(time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)) {
 		t.Fatalf("last event = %v", registration.LastEventAt)
+	}
+}
+
+func TestLookupRetrievesExistingTrackingHistory(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet || request.URL.Path != "/tracks/ups/1Z999AA10123456784" {
+			t.Errorf("request = %s %s", request.Method, request.URL.Path)
+		}
+		if authorization := request.Header.Get("Authorization"); authorization != "ShippoToken test-token" {
+			t.Errorf("authorization = %q", authorization)
+		}
+		_, _ = response.Write([]byte(`{
+  "carrier":"ups","tracking_number":"1Z999AA10123456784",
+  "tracking_status":{"status":"TRANSIT","status_details":"Arrived at facility","status_date":"2026-08-20T12:00:00Z"},
+  "tracking_history":[{"status":"PRE_TRANSIT","status_details":"Label created","status_date":"2026-08-19T10:00:00Z"}],"messages":[]
+}`))
+	}))
+	defer server.Close()
+
+	client := New("test-token", "")
+	client.baseURL = server.URL
+	registration, err := client.Lookup(t.Context(), "1Z999AA10123456784", "UPS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if registration.Status != "InTransit" || len(registration.History) != 1 || registration.History[0].Status != "PreTransit" {
+		t.Fatalf("registration = %+v", registration)
 	}
 }
 
@@ -161,8 +191,9 @@ func TestDetectCarrierUsesOnlyHighConfidenceFormats(t *testing.T) {
 		"ABC12345":               "",
 	}
 	for number, expected := range tests {
-		if actual := detectCarrier(number); actual != expected {
-			t.Errorf("detectCarrier(%q) = %q, want %q", number, actual, expected)
+		client := New("test-token", "")
+		if actual := client.DetectCarrier(number); actual != expected {
+			t.Errorf("DetectCarrier(%q) = %q, want %q", number, actual, expected)
 		}
 	}
 }

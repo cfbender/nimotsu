@@ -38,7 +38,7 @@ func main() {
 	if configuration.ShippoAPIToken != "" {
 		trackingClient = shippo.New(configuration.ShippoAPIToken, configuration.ShippoWebhookToken)
 		if configuration.ShippoWebhookToken == "" {
-			logger.Warn("Shippo webhook authentication is not configured; registrations work but tracking updates are disabled")
+			logger.Warn("Shippo webhook authentication is not configured; real-time tracking updates are disabled")
 		}
 	} else if configuration.ShippoWebhookToken != "" {
 		logger.Error("Shippo configuration is incomplete; the API token is required when a webhook token is set")
@@ -131,25 +131,36 @@ func main() {
 }
 
 func reconcileTracking(ctx context.Context, dataStore *store.Store, provider tracking.Provider, logger *slog.Logger) {
-	packages, err := dataStore.ListPackagesPendingRegistration(ctx, provider.Name())
+	packages, err := dataStore.ListPackages(ctx)
 	if err != nil {
-		logger.Error("list packages pending tracking registration", "error", err)
+		logger.Error("list packages for tracking reconciliation", "error", err)
 		return
 	}
 	for _, pkg := range packages {
 		if ctx.Err() != nil {
 			return
 		}
-		registration, err := provider.Register(ctx, pkg.TrackingNumber, pkg.Carrier)
+		registering := pkg.TrackingProvider != provider.Name()
+		if trackingComplete(pkg.Status) && registering {
+			continue
+		}
+		var registration tracking.Registration
+		if registering {
+			registration, err = provider.Register(ctx, pkg.TrackingNumber, pkg.Carrier)
+		} else {
+			registration, err = provider.Lookup(ctx, pkg.TrackingNumber, pkg.Carrier)
+		}
 		if err != nil {
-			status := "RegistrationFailed"
-			if errors.Is(err, tracking.ErrCarrierRequired) {
-				status = "NeedsCarrier"
+			if registering {
+				status := "RegistrationFailed"
+				if errors.Is(err, tracking.ErrCarrierRequired) {
+					status = "NeedsCarrier"
+				}
+				if updateErr := dataStore.SetRegistrationError(ctx, pkg.ID, pkg.Carrier, status, err.Error()); updateErr != nil {
+					logger.Error("save tracking registration error", "package_id", pkg.ID, "error", updateErr)
+				}
 			}
-			if updateErr := dataStore.SetRegistrationError(ctx, pkg.ID, pkg.Carrier, status, err.Error()); updateErr != nil {
-				logger.Error("save tracking registration error", "package_id", pkg.ID, "error", updateErr)
-			}
-			logger.Warn("tracking provider registration failed", "package_id", pkg.ID, "error", err)
+			logger.Warn("tracking provider reconciliation failed", "package_id", pkg.ID, "error", err)
 			continue
 		}
 		status := registration.Status
@@ -160,16 +171,39 @@ func reconcileTracking(ctx context.Context, dataStore *store.Store, provider tra
 		if registration.Carrier != "" {
 			carrier = registration.Carrier
 		}
-		if _, _, err := dataStore.UpdateTracking(ctx, pkg.TrackingNumber, carrier, store.TrackingUpdate{
+		updated, _, err := dataStore.UpdateTracking(ctx, pkg.TrackingNumber, carrier, store.TrackingUpdate{
 			Provider:      provider.Name(),
 			ProviderID:    registration.ProviderID,
 			Status:        status,
 			SubStatus:     registration.SubStatus,
 			LatestMessage: registration.LatestMessage,
 			LastEventAt:   registration.LastEventAt,
-		}); err != nil {
+		})
+		if err != nil {
 			logger.Error("save reconciled tracking registration", "package_id", pkg.ID, "error", err)
+			continue
 		}
+		events := make([]store.TrackingUpdate, 0, len(registration.History)+1)
+		for _, event := range registration.History {
+			events = append(events, store.TrackingUpdate{
+				Status: event.Status, SubStatus: event.SubStatus, LatestMessage: event.LatestMessage, LastEventAt: event.LastEventAt,
+			})
+		}
+		events = append(events, store.TrackingUpdate{
+			Status: registration.Status, SubStatus: registration.SubStatus, LatestMessage: registration.LatestMessage, LastEventAt: registration.LastEventAt,
+		})
+		if err := dataStore.RecordTrackingEvents(ctx, updated.ID, events); err != nil {
+			logger.Error("save reconciled tracking history", "package_id", pkg.ID, "error", err)
+		}
+	}
+}
+
+func trackingComplete(status string) bool {
+	switch status {
+	case "Delivered", "Expired", "Cancelled", "Canceled":
+		return true
+	default:
+		return false
 	}
 }
 

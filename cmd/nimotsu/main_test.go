@@ -7,27 +7,45 @@ import (
 	"net/http"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/cfbender/nimotsu/internal/store"
 	"github.com/cfbender/nimotsu/internal/tracking"
 )
 
 type reconciliationProvider struct {
-	calls int
+	registerCalls int
+	lookupCalls   int
 }
 
 func (*reconciliationProvider) Name() string {
 	return "test-provider"
 }
 
+func (*reconciliationProvider) DetectCarrier(string) string {
+	return ""
+}
+
 func (p *reconciliationProvider) Register(_ context.Context, number, _ string) (tracking.Registration, error) {
-	p.calls++
+	p.registerCalls++
+	return reconciliationRegistration(number), nil
+}
+
+func (p *reconciliationProvider) Lookup(_ context.Context, number, _ string) (tracking.Registration, error) {
+	p.lookupCalls++
+	return reconciliationRegistration(number), nil
+}
+
+func reconciliationRegistration(number string) tracking.Registration {
+	eventAt := time.Date(2026, time.August, 20, 12, 0, 0, 0, time.UTC)
+	historyAt := eventAt.Add(-time.Hour)
 	return tracking.Registration{ProviderID: "trk_123", Update: tracking.Update{
 		TrackingNumber: number,
 		Carrier:        "USPS",
 		Status:         "InTransit",
 		LatestMessage:  "Moving through network",
-	}}, nil
+		LastEventAt:    &eventAt,
+	}, History: []tracking.Update{{Status: "PreTransit", LatestMessage: "Label created", LastEventAt: &historyAt}}}
 }
 
 func (*reconciliationProvider) ParseWebhook(_ *http.Request, _ []byte) (tracking.Update, error) {
@@ -57,7 +75,14 @@ func TestReconcileTrackingRegistersExistingFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(packages) != 1 || packages[0].Status != "InTransit" || packages[0].Carrier != "USPS" || packages[0].TrackingProvider != "test-provider" || packages[0].TrackingProviderID != "trk_123" || packages[0].TrackingError != "" || provider.calls != 1 {
+	if len(packages) != 1 || packages[0].Status != "InTransit" || packages[0].Carrier != "USPS" || packages[0].TrackingProvider != "test-provider" || packages[0].TrackingProviderID != "trk_123" || packages[0].TrackingError != "" || provider.registerCalls != 1 || provider.lookupCalls != 1 {
 		t.Fatalf("reconciled packages = %+v", packages)
+	}
+	events, err := dataStore.ListTrackingEvents(t.Context(), packages[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[0].Status != "InTransit" || events[1].Status != "PreTransit" {
+		t.Fatalf("tracking events = %+v", events)
 	}
 }

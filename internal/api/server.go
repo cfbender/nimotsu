@@ -44,8 +44,10 @@ func New(dataStore *store.Store, trackerClient tracking.Provider, gmailService *
 	mux.HandleFunc("GET /api/health", server.health)
 	mux.Handle("GET /api/packages", server.authorize(http.HandlerFunc(server.listPackages)))
 	mux.Handle("POST /api/packages", server.authorize(http.HandlerFunc(server.createPackage)))
+	mux.Handle("GET /api/packages/{id}/events", server.authorize(http.HandlerFunc(server.listTrackingEvents)))
 	mux.Handle("PATCH /api/packages/{id}", server.authorize(http.HandlerFunc(server.updatePackage)))
 	mux.Handle("DELETE /api/packages/{id}", server.authorize(http.HandlerFunc(server.archivePackage)))
+	mux.Handle("GET /api/tracking/carrier", server.authorize(http.HandlerFunc(server.detectCarrier)))
 	mux.Handle("POST /api/devices", server.authorize(http.HandlerFunc(server.registerDevice)))
 	mux.Handle("GET /api/gmail/status", server.authorize(http.HandlerFunc(server.gmailStatus)))
 	mux.Handle("POST /api/gmail/oauth/start", server.authorize(http.HandlerFunc(server.startGmailOAuth)))
@@ -71,6 +73,28 @@ func (s *Server) listPackages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, packages)
+}
+
+func (s *Server) listTrackingEvents(w http.ResponseWriter, r *http.Request) {
+	events, err := s.store.ListTrackingEvents(r.Context(), r.PathValue("id"))
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "package not found")
+		return
+	}
+	if err != nil {
+		s.internalError(w, "list tracking events", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, events)
+}
+
+func (s *Server) detectCarrier(w http.ResponseWriter, r *http.Request) {
+	trackingNumber := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("tracking_number")))
+	carrier := ""
+	if s.tracker != nil && trackingNumberPattern.MatchString(trackingNumber) {
+		carrier = s.tracker.DetectCarrier(trackingNumber)
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"carrier": carrier})
 }
 
 func (s *Server) createPackage(w http.ResponseWriter, r *http.Request) {
@@ -139,6 +163,15 @@ func (s *Server) savePackage(ctx context.Context, description, trackingNumber, r
 			s.logger.Warn("tracking provider registration failed", "tracking_number", trackingNumber, "error", err)
 		}
 	}
+	events := make([]store.TrackingUpdate, 0, len(registration.History))
+	for _, event := range registration.History {
+		events = append(events, store.TrackingUpdate{
+			Status:        event.Status,
+			SubStatus:     event.SubStatus,
+			LatestMessage: event.LatestMessage,
+			LastEventAt:   event.LastEventAt,
+		})
+	}
 	return s.store.CreatePackage(ctx, store.NewPackage{
 		Description:        description,
 		TrackingNumber:     trackingNumber,
@@ -150,6 +183,7 @@ func (s *Server) savePackage(ctx context.Context, description, trackingNumber, r
 		LatestMessage:      registration.LatestMessage,
 		LastEventAt:        registration.LastEventAt,
 		TrackingError:      trackingError,
+		Events:             events,
 	})
 }
 
