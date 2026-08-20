@@ -33,7 +33,7 @@ Again: 1Z999AA10123456784
 	}
 }
 
-func TestGmailSyncStoresEncryptedCandidates(t *testing.T) {
+func TestGmailSyncFindsArchivedMessage(t *testing.T) {
 	dataStore, err := store.Open(filepath.Join(t.TempDir(), "nimotsu.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -44,6 +44,11 @@ func TestGmailSyncStoresEncryptedCandidates(t *testing.T) {
 	mux.HandleFunc("/gmail/v1/users/me/messages", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer test-access-token" {
 			t.Errorf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		if _, ok := r.URL.Query()["labelIds"]; ok {
+			t.Errorf("labelIds = %q, want omitted so archived mail is searched", r.URL.Query()["labelIds"])
+			_ = json.NewEncoder(w).Encode(map[string]any{"messages": []map[string]string{}})
+			return
 		}
 		if r.URL.Query().Get("maxResults") != "50" {
 			t.Errorf("maxResults = %q", r.URL.Query().Get("maxResults"))

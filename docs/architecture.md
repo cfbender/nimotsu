@@ -24,7 +24,7 @@ Gmail uses Google's web-server OAuth flow with `gmail.readonly`, offline access,
 
 - Gmail push requires every administrator to provision a Pub/Sub topic, IAM grant, subscription, and public webhook.
 - `users.watch` expires within seven days and must be renewed.
-- a five-minute inbox poll keeps the deployment at one container and is sufficient for shipment discovery.
+- a five-minute recent-mail poll keeps the deployment at one container and finds shipping messages even when Gmail rules archive them.
 
 After linking, a worker queries likely shipping messages, extracts conservative tracking-number candidates, and puts them in a review queue. Message bodies are processed in memory but not persisted. It does not automatically register every number-like string because external Shippo tracking can be billable and emails contain many false positives.
 

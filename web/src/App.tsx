@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useState } from 'react'
+import { FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { Browser } from '@capacitor/browser'
 import {
   acceptEmailCandidate,
@@ -532,10 +532,10 @@ function SettingsSheet({
   }
 
   async function scanGmail() {
-    setGmailAction('Scanning inbox…')
+    setGmailAction('Scanning Gmail…')
     try {
       setGmailStatus(await syncGmail())
-      setGmailAction('Inbox scan complete')
+      setGmailAction('Gmail scan complete')
       onCandidatesChanged()
     } catch (error) {
       setGmailAction(error instanceof Error ? error.message : 'Could not scan Gmail')
@@ -598,7 +598,7 @@ function SettingsSheet({
         {!gmailStatus ? (
           <p>Checking Gmail configuration…</p>
         ) : !gmailStatus.configured ? (
-          <p>Add the Google OAuth and encryption settings to the server to enable inbox discovery.</p>
+          <p>Add the Google OAuth and encryption settings to the server to enable email discovery.</p>
         ) : gmailStatus.connected ? (
           <>
             <p><strong>{gmailStatus.email}</strong><br />Scans every five minutes. Messages stay in Gmail; only tracking suggestions are saved.</p>
@@ -631,19 +631,128 @@ function SettingsSheet({
 }
 
 function Sheet({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  const [phase, setPhase] = useState<'opening' | 'open' | 'closing'>('opening')
+  const [dragOffset, setDragOffset] = useState(0)
+  const [dragging, setDragging] = useState(false)
+  const sheetRef = useRef<HTMLElement>(null)
+  const phaseRef = useRef(phase)
+  const closeTimerRef = useRef<number | null>(null)
+  const closedRef = useRef(false)
+  const dragRef = useRef<{
+    pointerID: number
+    startY: number
+    lastY: number
+    lastTime: number
+    velocity: number
+  } | null>(null)
+
+  const finishClose = useCallback(() => {
+    if (closedRef.current) return
+    closedRef.current = true
+    onClose()
+  }, [onClose])
+
+  const requestClose = useCallback(() => {
+    if (phaseRef.current === 'closing') return
+    phaseRef.current = 'closing'
+    dragRef.current = null
+    setDragging(false)
+    setDragOffset(0)
+    setPhase('closing')
+    closeTimerRef.current = window.setTimeout(finishClose, 300)
+  }, [finishClose])
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const frame = window.requestAnimationFrame(() => {
+      if (phaseRef.current !== 'opening') return
+      phaseRef.current = 'open'
+      setPhase('open')
+    })
+    return () => {
+      window.cancelAnimationFrame(frame)
+      if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current)
+      document.body.style.overflow = previousOverflow
+    }
+  }, [])
+
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !document.querySelector('[role="alertdialog"]')) onClose()
+      if (event.key === 'Escape' && !document.querySelector('[role="alertdialog"]')) requestClose()
     }
     window.addEventListener('keydown', closeOnEscape)
     return () => window.removeEventListener('keydown', closeOnEscape)
-  }, [onClose])
+  }, [requestClose])
+
+  function startDrag(event: React.PointerEvent<HTMLDivElement>) {
+    if (phaseRef.current !== 'open' || !event.isPrimary || event.button !== 0) return
+    dragRef.current = {
+      pointerID: event.pointerId,
+      startY: event.clientY,
+      lastY: event.clientY,
+      lastTime: event.timeStamp,
+      velocity: 0,
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setDragging(true)
+  }
+
+  function moveDrag(event: React.PointerEvent<HTMLDivElement>) {
+    const drag = dragRef.current
+    if (!drag || drag.pointerID !== event.pointerId) return
+    const elapsed = event.timeStamp - drag.lastTime
+    if (elapsed > 0) drag.velocity = (event.clientY - drag.lastY) / elapsed
+    drag.lastY = event.clientY
+    drag.lastTime = event.timeStamp
+    setDragOffset(Math.max(0, event.clientY - drag.startY))
+  }
+
+  function endDrag(event: React.PointerEvent<HTMLDivElement>, cancelled = false) {
+    const drag = dragRef.current
+    if (!drag || drag.pointerID !== event.pointerId) return
+    const offset = Math.max(0, event.clientY - drag.startY)
+    const threshold = Math.min(140, (sheetRef.current?.offsetHeight ?? 560) * 0.25)
+    dragRef.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    if (!cancelled && (offset >= threshold || (offset > 24 && drag.velocity > 0.55))) {
+      requestClose()
+      return
+    }
+    setDragging(false)
+    setDragOffset(0)
+  }
 
   return (
-    <div className="sheet-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
-        <div className="sheet-handle" />
-        <div className="sheet-heading"><h2 id="sheet-title">{title}</h2><button type="button" onClick={onClose} aria-label="Close"><CloseIcon /></button></div>
+    <div
+      className={`sheet-backdrop sheet-${phase}${dragging ? ' sheet-dragging' : ''}`}
+      role="presentation"
+      onPointerDown={(event) => event.target === event.currentTarget && requestClose()}
+    >
+      <section
+        className="sheet"
+        ref={sheetRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="sheet-title"
+        style={{ '--sheet-drag-y': `${dragOffset}px` } as React.CSSProperties}
+        onTransitionEnd={(event) => {
+          if (event.target === event.currentTarget && event.propertyName === 'transform' && phaseRef.current === 'closing') finishClose()
+        }}
+      >
+        <div
+          className="sheet-grab-area"
+          aria-hidden="true"
+          onPointerDown={startDrag}
+          onPointerMove={moveDrag}
+          onPointerUp={(event) => endDrag(event)}
+          onPointerCancel={(event) => endDrag(event, true)}
+        >
+          <div className="sheet-handle" />
+        </div>
+        <div className="sheet-heading"><h2 id="sheet-title">{title}</h2><button type="button" onClick={requestClose} aria-label="Close"><CloseIcon /></button></div>
         {children}
       </section>
     </div>

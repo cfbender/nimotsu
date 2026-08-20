@@ -10,7 +10,7 @@ The repository currently contains the first end-to-end slice:
 - provider-neutral tracking integration with Shippo and authenticated `track_updated` webhooks
 - Capacitor 8 Android shell and device push-token registration
 - FCM HTTP v1 delivery from the Go server
-- Gmail OAuth, encrypted token storage, periodic inbox scanning, and a review queue
+- Gmail OAuth, encrypted token storage, periodic recent-mail scanning, and a review queue
 - one-container deployment foundation
 
 ## Development

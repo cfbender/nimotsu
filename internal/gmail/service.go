@@ -298,7 +298,6 @@ func (s *Service) consumeState(state string) bool {
 func (s *Service) listMessages(ctx context.Context, client *http.Client, cutoff time.Time) ([]messageSummary, error) {
 	query := fmt.Sprintf("after:%d {tracking shipped delivery package}", cutoff.Unix())
 	endpoint := s.gmailAPIURL + "/users/me/messages?" + url.Values{
-		"labelIds":   []string{"INBOX"},
 		"maxResults": []string{"50"},
 		"q":          []string{query},
 	}.Encode()
