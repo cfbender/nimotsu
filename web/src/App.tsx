@@ -1,12 +1,22 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react'
+import { Browser } from '@capacitor/browser'
 import {
+  acceptEmailCandidate,
   addPackage,
   archivePackage,
+  beginGmailOAuth,
+  disconnectGmail,
+  dismissEmailCandidate,
   getConnectionSettings,
+  getGmailStatus,
   isNative,
+  listEmailCandidates,
   listPackages,
   saveConnectionSettings,
   setPackageNotifications,
+  syncGmail,
+  type EmailCandidate,
+  type GmailStatus,
   type TrackedPackage,
 } from './api'
 import { formatRelativeDate, formatStatus } from './format'
@@ -17,26 +27,34 @@ type Sheet = 'add' | 'settings' | null
 
 export default function App() {
   const [packages, setPackages] = useState<TrackedPackage[]>([])
+  const [candidates, setCandidates] = useState<EmailCandidate[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [sheet, setSheet] = useState<Sheet>(isNative() && !getConnectionSettings().serverURL ? 'settings' : null)
+  const [sheet, setSheet] = useState<Sheet>(
+    (isNative() && !getConnectionSettings().serverURL) || new URLSearchParams(window.location.search).has('gmail') ? 'settings' : null,
+  )
   const [connectionVersion, setConnectionVersion] = useState(0)
 
-  const loadPackages = useCallback(async () => {
+  const loadData = useCallback(async () => {
     setLoading(true)
     setError('')
     try {
-      setPackages(await listPackages())
+      const [nextPackages, nextCandidates] = await Promise.all([listPackages(), listEmailCandidates()])
+      setPackages(nextPackages)
+      setCandidates(nextCandidates)
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Could not load packages')
+      setError(requestError instanceof Error ? requestError.message : 'Could not load deliveries')
     } finally {
       setLoading(false)
     }
   }, [])
 
   useEffect(() => {
-    if (!isNative() || getConnectionSettings().serverURL) void loadPackages()
-  }, [connectionVersion, loadPackages])
+    if (new URLSearchParams(window.location.search).has('gmail')) {
+      window.history.replaceState({}, '', window.location.pathname)
+    }
+    if (!isNative() || getConnectionSettings().serverURL) void loadData()
+  }, [connectionVersion, loadData])
 
   async function toggleNotifications(pkg: TrackedPackage) {
     try {
@@ -57,6 +75,25 @@ export default function App() {
     }
   }
 
+  async function trackCandidate(candidate: EmailCandidate) {
+    try {
+      const pkg = await acceptEmailCandidate(candidate.id)
+      setCandidates((current) => current.filter((item) => item.id !== candidate.id))
+      setPackages((current) => [pkg, ...current])
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Could not track email suggestion')
+    }
+  }
+
+  async function dismissCandidate(candidate: EmailCandidate) {
+    try {
+      await dismissEmailCandidate(candidate.id)
+      setCandidates((current) => current.filter((item) => item.id !== candidate.id))
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Could not dismiss email suggestion')
+    }
+  }
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -73,47 +110,54 @@ export default function App() {
         {error && (
           <div className="error-banner" role="alert">
             <span>{error}</span>
-            <button type="button" onClick={() => void loadPackages()}>Retry</button>
+            <button type="button" onClick={() => void loadData()}>Retry</button>
           </div>
         )}
 
         {loading ? (
           <div className="loading" aria-label="Loading packages"><span /><span /><span /></div>
-        ) : packages.length === 0 ? (
-          <section className="empty-state">
-            <div className="empty-illustration"><PackageIcon /></div>
-            <h2>Nothing in transit</h2>
-            <p>Add a tracking number and we’ll keep an eye on it.</p>
-            <button className="primary-button" type="button" onClick={() => setSheet('add')}>Add your first package</button>
-          </section>
         ) : (
-          <section className="package-list" aria-label="Packages">
-            {packages.map((pkg) => (
-              <article className={`package-card status-${pkg.status.toLowerCase()}`} key={pkg.id}>
-                <div className="package-card-main">
-                  <div className="status-mark"><PackageIcon /></div>
-                  <div className="package-copy">
-                    <div className="package-heading">
-                      <h2>{pkg.description}</h2>
-                      <span className="status-pill">{formatStatus(pkg.status)}</span>
+          <>
+            {candidates.length > 0 && (
+              <CandidateList candidates={candidates} onTrack={trackCandidate} onDismiss={dismissCandidate} />
+            )}
+            {packages.length === 0 ? (
+              <section className={`empty-state${candidates.length > 0 ? ' compact' : ''}`}>
+                <div className="empty-illustration"><PackageIcon /></div>
+                <h2>Nothing in transit</h2>
+                <p>Add a tracking number and we’ll keep an eye on it.</p>
+                <button className="primary-button" type="button" onClick={() => setSheet('add')}>Add your first package</button>
+              </section>
+            ) : (
+              <section className="package-list" aria-label="Packages">
+                {packages.map((pkg) => (
+                  <article className={`package-card status-${pkg.status.toLowerCase()}`} key={pkg.id}>
+                    <div className="package-card-main">
+                      <div className="status-mark"><PackageIcon /></div>
+                      <div className="package-copy">
+                        <div className="package-heading">
+                          <h2>{pkg.description}</h2>
+                          <span className="status-pill">{formatStatus(pkg.status)}</span>
+                        </div>
+                        <p className="latest-message">{pkg.latest_message || pkg.tracking_error || 'Waiting for a tracking update'}</p>
+                        <div className="package-meta">
+                          <span>{pkg.tracking_number}</span>
+                          <span className="package-update"><span aria-hidden="true">·</span> {formatRelativeDate(pkg.last_event_at)}</span>
+                        </div>
+                      </div>
                     </div>
-                    <p className="latest-message">{pkg.latest_message || pkg.tracking_error || 'Waiting for a tracking update'}</p>
-                    <div className="package-meta">
-                      <span>{pkg.tracking_number}</span>
-                      <span className="package-update"><span aria-hidden="true">·</span> {formatRelativeDate(pkg.last_event_at)}</span>
+                    <div className="card-actions">
+                      <button type="button" onClick={() => void toggleNotifications(pkg)} aria-pressed={pkg.notifications_enabled}>
+                        <BellIcon enabled={pkg.notifications_enabled} />
+                        {pkg.notifications_enabled ? 'Updates on' : 'Updates off'}
+                      </button>
+                      <button className="danger-action" type="button" onClick={() => void removePackage(pkg)}>Archive</button>
                     </div>
-                  </div>
-                </div>
-                <div className="card-actions">
-                  <button type="button" onClick={() => void toggleNotifications(pkg)} aria-pressed={pkg.notifications_enabled}>
-                    <BellIcon enabled={pkg.notifications_enabled} />
-                    {pkg.notifications_enabled ? 'Updates on' : 'Updates off'}
-                  </button>
-                  <button className="danger-action" type="button" onClick={() => void removePackage(pkg)}>Archive</button>
-                </div>
-              </article>
-            ))}
-          </section>
+                  </article>
+                ))}
+              </section>
+            )}
+          </>
         )}
       </main>
 
@@ -135,6 +179,7 @@ export default function App() {
       {sheet === 'settings' && (
         <SettingsSheet
           onClose={() => setSheet(null)}
+          onCandidatesChanged={() => void loadData()}
           onSaved={() => {
             setSheet(null)
             setConnectionVersion((value) => value + 1)
@@ -142,6 +187,59 @@ export default function App() {
         />
       )}
     </div>
+  )
+}
+
+function CandidateList({
+  candidates,
+  onTrack,
+  onDismiss,
+}: {
+  candidates: EmailCandidate[]
+  onTrack: (candidate: EmailCandidate) => Promise<void>
+  onDismiss: (candidate: EmailCandidate) => Promise<void>
+}) {
+  const [workingID, setWorkingID] = useState('')
+
+  async function run(candidate: EmailCandidate, action: (candidate: EmailCandidate) => Promise<void>) {
+    setWorkingID(candidate.id)
+    try {
+      await action(candidate)
+    } finally {
+      setWorkingID('')
+    }
+  }
+
+  return (
+    <section className="candidate-section" aria-labelledby="candidate-heading">
+      <div className="section-heading">
+        <div>
+          <p className="eyebrow">From Gmail</p>
+          <h2 id="candidate-heading">Ready to review</h2>
+        </div>
+        <span>{candidates.length}</span>
+      </div>
+      <div className="candidate-list">
+        {candidates.map((candidate) => (
+          <article className="candidate-card" key={candidate.id}>
+            <div className="candidate-icon"><MailIcon /></div>
+            <div className="candidate-copy">
+              <h3>{candidate.description}</h3>
+              <p>
+                <span>{candidate.sender || 'Gmail'}</span>
+                <span aria-hidden="true">·</span>
+                <time dateTime={candidate.message_at}>{new Date(candidate.message_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</time>
+              </p>
+              <code>{candidate.tracking_number}</code>
+            </div>
+            <div className="candidate-actions">
+              <button className="primary-button" disabled={workingID === candidate.id} type="button" onClick={() => void run(candidate, onTrack)}>Track</button>
+              <button disabled={workingID === candidate.id} type="button" onClick={() => void run(candidate, onDismiss)}>Dismiss</button>
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
   )
 }
 
@@ -193,12 +291,26 @@ function AddPackageSheet({ onClose, onAdded }: { onClose: () => void; onAdded: (
   )
 }
 
-function SettingsSheet({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+function SettingsSheet({
+  onClose,
+  onSaved,
+  onCandidatesChanged,
+}: {
+  onClose: () => void
+  onSaved: () => void
+  onCandidatesChanged: () => void
+}) {
   const current = getConnectionSettings()
   const [serverURL, setServerURL] = useState(current.serverURL)
   const [apiToken, setAPIToken] = useState(current.apiToken)
   const [themeMode, setThemeMode] = useState(getThemeMode)
   const [pushState, setPushState] = useState('')
+  const [gmailStatus, setGmailStatus] = useState<GmailStatus | null>(null)
+  const [gmailAction, setGmailAction] = useState('')
+
+  useEffect(() => {
+    void refreshGmailStatus()
+  }, [])
 
   function save(event: FormEvent) {
     event.preventDefault()
@@ -220,6 +332,58 @@ function SettingsSheet({ onClose, onSaved }: { onClose: () => void; onSaved: () 
   function selectTheme(mode: ThemeMode) {
     setThemeMode(mode)
     saveThemeMode(mode)
+  }
+
+  async function refreshGmailStatus() {
+    try {
+      setGmailStatus(await getGmailStatus())
+    } catch (error) {
+      setGmailAction(error instanceof Error ? error.message : 'Could not read Gmail status')
+    }
+  }
+
+  async function linkGmail() {
+    setGmailAction('Opening Google…')
+    try {
+      saveConnectionSettings({ serverURL, apiToken })
+      const authorizationURL = await beginGmailOAuth()
+      if (isNative()) {
+        const listener = await Browser.addListener('browserFinished', () => {
+          void refreshGmailStatus()
+          void listener.remove()
+        })
+        await Browser.open({ url: authorizationURL })
+        setGmailAction('Finish linking in the browser, then return here.')
+      } else {
+        window.location.assign(authorizationURL)
+      }
+    } catch (error) {
+      setGmailAction(error instanceof Error ? error.message : 'Could not link Gmail')
+    }
+  }
+
+  async function scanGmail() {
+    setGmailAction('Scanning inbox…')
+    try {
+      setGmailStatus(await syncGmail())
+      setGmailAction('Inbox scan complete')
+      onCandidatesChanged()
+    } catch (error) {
+      setGmailAction(error instanceof Error ? error.message : 'Could not scan Gmail')
+    }
+  }
+
+  async function removeGmail() {
+    if (!window.confirm('Disconnect Gmail and remove its pending suggestions?')) return
+    setGmailAction('Disconnecting…')
+    try {
+      await disconnectGmail()
+      await refreshGmailStatus()
+      setGmailAction('Gmail disconnected')
+      onCandidatesChanged()
+    } catch (error) {
+      setGmailAction(error instanceof Error ? error.message : 'Could not disconnect Gmail')
+    }
   }
 
   return (
@@ -256,9 +420,28 @@ function SettingsSheet({ onClose, onSaved }: { onClose: () => void; onSaved: () 
           {pushState && <p className="push-state" role="status">{pushState}</p>}
         </div>
       )}
-      <div className="settings-section coming-soon">
-        <div><h3>Gmail</h3><p>Automatic tracking-number suggestions are the next integration.</p></div>
-        <span>Coming next</span>
+      <div className="settings-section gmail-settings">
+        <h3>Gmail discovery</h3>
+        {!gmailStatus ? (
+          <p>Checking Gmail configuration…</p>
+        ) : !gmailStatus.configured ? (
+          <p>Add the Google OAuth and encryption settings to the server to enable inbox discovery.</p>
+        ) : gmailStatus.connected ? (
+          <>
+            <p><strong>{gmailStatus.email}</strong><br />Scans every five minutes. Messages stay in Gmail; only tracking suggestions are saved.</p>
+            {gmailStatus.sync_error && <p className="form-error" role="alert">{gmailStatus.sync_error}</p>}
+            <div className="gmail-actions">
+              <button className="secondary-button" type="button" onClick={() => void scanGmail()}>Scan now</button>
+              <button className="text-button danger-action" type="button" onClick={() => void removeGmail()}>Disconnect</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p>Find tracking numbers in shipping emails and review them before adding packages.</p>
+            <button className="secondary-button full-width" type="button" onClick={() => void linkGmail()}>Link Gmail</button>
+          </>
+        )}
+        {gmailAction && <p className="push-state" role="status">{gmailAction}</p>}
       </div>
     </Sheet>
   )
@@ -278,6 +461,10 @@ function Sheet({ title, onClose, children }: { title: string; onClose: () => voi
 
 function PackageIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 7.5 8-4 8 4v9l-8 4-8-4zM4 7.5l8 4 8-4M12 11.5v9M8 5.5l8 4" /></svg>
+}
+
+function MailIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m4 7 8 6 8-6" /></svg>
 }
 
 function BellIcon({ enabled }: { enabled: boolean }) {

@@ -20,13 +20,13 @@ Creating a package calls `POST /track/v2.4/register` and omits `carrier` by defa
 
 ### Gmail OAuth with periodic sync
 
-Gmail should use Google's web-server OAuth flow with `gmail.readonly`, offline access, a CSRF state value, and encrypted refresh-token storage. For this self-hosted product, periodic Gmail API synchronization is preferable to Gmail push:
+Gmail uses Google's web-server OAuth flow with `gmail.readonly`, offline access, a single-use CSRF state value, and AES-GCM encrypted token storage. For this self-hosted product, periodic Gmail API synchronization is preferable to Gmail push:
 
 - Gmail push requires every administrator to provision a Pub/Sub topic, IAM grant, subscription, and public webhook.
 - `users.watch` expires within seven days and must be renewed.
 - a five-minute inbox poll keeps the deployment at one container and is sufficient for shipment discovery.
 
-After linking, a worker will query messages newer than the last successful watermark, extract conservative carrier-specific candidates, and put them in a review queue. It must not automatically register every number-like string because 17TRACK registration consumes quota and emails contain many false positives.
+After linking, a worker queries likely shipping messages, extracts conservative tracking-number candidates, and puts them in a review queue. Message bodies are processed in memory but not persisted. It does not automatically register every number-like string because 17TRACK registration consumes quota and emails contain many false positives.
 
 The user flow remains one click after the instance administrator has supplied a Google OAuth client ID and secret. Self-hosting cannot eliminate that one-time Google Cloud configuration because each deployment needs an authorized redirect URI and a trusted OAuth client.
 
@@ -48,6 +48,6 @@ The user flow remains one click after the instance administrator has supplied a 
 ## Delivery order
 
 1. **Tracking slice (implemented):** CRUD, 17TRACK registration/webhooks, Android shell, FCM.
-2. **Gmail discovery:** OAuth, encrypted token storage, polling worker, candidate review.
+2. **Gmail discovery (implemented):** OAuth, encrypted token storage, polling worker, candidate review.
 3. **Notification durability:** SQLite outbox and dead-device cleanup; the current sender is best-effort after the webhook transaction commits.
 4. **Hardening:** first-run token setup, rate limits, backup/restore, release signing, and update delivery.

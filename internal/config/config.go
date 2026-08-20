@@ -9,6 +9,10 @@ type Config struct {
 	APIToken            string
 	SeventeenTrackKey   string
 	FirebaseCredentials string
+	GmailClientID       string
+	GmailClientSecret   string
+	GmailPublicURL      string
+	EncryptionKey       string
 }
 
 func Load() Config {
@@ -19,6 +23,10 @@ func Load() Config {
 		APIToken:            os.Getenv("NIMOTSU_API_TOKEN"),
 		SeventeenTrackKey:   os.Getenv("NIMOTSU_17TRACK_KEY"),
 		FirebaseCredentials: os.Getenv("NIMOTSU_FIREBASE_CREDENTIALS"),
+		GmailClientID:       os.Getenv("NIMOTSU_GMAIL_CLIENT_ID"),
+		GmailClientSecret:   os.Getenv("NIMOTSU_GMAIL_CLIENT_SECRET"),
+		GmailPublicURL:      os.Getenv("NIMOTSU_PUBLIC_URL"),
+		EncryptionKey:       os.Getenv("NIMOTSU_ENCRYPTION_KEY"),
 	}
 }
 

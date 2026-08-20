@@ -23,6 +23,24 @@ export interface ConnectionSettings {
   apiToken: string
 }
 
+export interface GmailStatus {
+  configured: boolean
+  connected: boolean
+  email?: string
+  last_sync_at?: string
+  sync_error?: string
+  candidate_count: number
+}
+
+export interface EmailCandidate {
+  id: string
+  tracking_number: string
+  description: string
+  sender: string
+  message_at: string
+  created_at: string
+}
+
 export function isNative(): boolean {
   return Capacitor.isNativePlatform()
 }
@@ -71,6 +89,35 @@ export async function registerDevice(token: string): Promise<void> {
     method: 'POST',
     body: JSON.stringify({ token, platform: 'android' }),
   })
+}
+
+export async function getGmailStatus(): Promise<GmailStatus> {
+  return request<GmailStatus>('/api/gmail/status')
+}
+
+export async function beginGmailOAuth(): Promise<string> {
+  const response = await request<{ url: string }>('/api/gmail/oauth/start', { method: 'POST' })
+  return response.url
+}
+
+export async function syncGmail(): Promise<GmailStatus> {
+  return request<GmailStatus>('/api/gmail/sync', { method: 'POST' })
+}
+
+export async function disconnectGmail(): Promise<void> {
+  await request<void>('/api/gmail', { method: 'DELETE' })
+}
+
+export async function listEmailCandidates(): Promise<EmailCandidate[]> {
+  return request<EmailCandidate[]>('/api/gmail/candidates')
+}
+
+export async function acceptEmailCandidate(id: string): Promise<TrackedPackage> {
+  return request<TrackedPackage>(`/api/gmail/candidates/${id}/accept`, { method: 'POST' })
+}
+
+export async function dismissEmailCandidate(id: string): Promise<void> {
+  await request<void>(`/api/gmail/candidates/${id}`, { method: 'DELETE' })
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {

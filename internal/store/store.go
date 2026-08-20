@@ -52,6 +52,25 @@ type TrackingUpdate struct {
 	LastEventAt   *time.Time
 }
 
+type GmailConnection struct {
+	Email       string
+	Token       []byte
+	LastSyncAt  *time.Time
+	SyncError   string
+	ConnectedAt time.Time
+	UpdatedAt   time.Time
+}
+
+type EmailCandidate struct {
+	ID             string    `json:"id"`
+	MessageID      string    `json:"-"`
+	TrackingNumber string    `json:"tracking_number"`
+	Description    string    `json:"description"`
+	Sender         string    `json:"sender"`
+	MessageAt      time.Time `json:"message_at"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
 const packageColumns = `
 	id, description, tracking_number, carrier_code, status, sub_status,
 	latest_message, last_event_at, tracking_error, notifications_enabled,
@@ -121,6 +140,29 @@ CREATE TABLE IF NOT EXISTS devices (
     platform TEXT NOT NULL CHECK (platform = 'android'),
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS gmail_connection (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    email TEXT NOT NULL,
+    token BLOB NOT NULL,
+    last_sync_at INTEGER,
+    sync_error TEXT NOT NULL DEFAULT '',
+    connected_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS email_candidates (
+    id TEXT PRIMARY KEY,
+    message_id TEXT NOT NULL,
+    tracking_number TEXT NOT NULL,
+    description TEXT NOT NULL,
+    sender TEXT NOT NULL DEFAULT '',
+    message_at INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'dismissed')),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(message_id, tracking_number)
 );`
 
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
@@ -305,6 +347,198 @@ func (s *Store) ListDeviceTokens(ctx context.Context) ([]string, error) {
 	return tokens, rows.Err()
 }
 
+func (s *Store) SaveGmailConnection(ctx context.Context, email string, token []byte) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin Gmail connection update: %w", err)
+	}
+	defer tx.Rollback()
+
+	var currentEmail string
+	err = tx.QueryRowContext(ctx, `SELECT email FROM gmail_connection WHERE id = 1`).Scan(&currentEmail)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("read Gmail connection: %w", err)
+	}
+	if err == nil && currentEmail != email {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM email_candidates`); err != nil {
+			return fmt.Errorf("clear previous Gmail candidates: %w", err)
+		}
+	}
+
+	now := time.Now().UTC().Truncate(time.Second).Unix()
+	_, err = tx.ExecContext(ctx, `
+INSERT INTO gmail_connection (id, email, token, connected_at, updated_at)
+VALUES (1, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    email = excluded.email,
+    token = excluded.token,
+    sync_error = '',
+    connected_at = excluded.connected_at,
+    updated_at = excluded.updated_at`, email, token, now, now)
+	if err != nil {
+		return fmt.Errorf("save Gmail connection: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit Gmail connection: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) GmailConnection(ctx context.Context) (GmailConnection, error) {
+	var connection GmailConnection
+	var lastSync sql.NullInt64
+	var connected, updated int64
+	err := s.db.QueryRowContext(ctx, `
+SELECT email, token, last_sync_at, sync_error, connected_at, updated_at
+FROM gmail_connection WHERE id = 1`).Scan(
+		&connection.Email, &connection.Token, &lastSync, &connection.SyncError, &connected, &updated,
+	)
+	if err != nil {
+		return GmailConnection{}, err
+	}
+	if lastSync.Valid {
+		value := time.Unix(lastSync.Int64, 0).UTC()
+		connection.LastSyncAt = &value
+	}
+	connection.ConnectedAt = time.Unix(connected, 0).UTC()
+	connection.UpdatedAt = time.Unix(updated, 0).UTC()
+	return connection, nil
+}
+
+func (s *Store) UpdateGmailToken(ctx context.Context, token []byte) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE gmail_connection SET token = ?, updated_at = ? WHERE id = 1`, token, time.Now().UTC().Unix())
+	if err != nil {
+		return fmt.Errorf("update Gmail token: %w", err)
+	}
+	if rows, _ := result.RowsAffected(); rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) UpdateGmailSync(ctx context.Context, syncedAt *time.Time, syncError string) error {
+	var syncUnix any
+	if syncedAt != nil {
+		syncUnix = syncedAt.UTC().Unix()
+	}
+	result, err := s.db.ExecContext(ctx, `
+UPDATE gmail_connection
+SET last_sync_at = COALESCE(?, last_sync_at), sync_error = ?, updated_at = ?
+WHERE id = 1`, syncUnix, syncError, time.Now().UTC().Unix())
+	if err != nil {
+		return fmt.Errorf("update Gmail sync: %w", err)
+	}
+	if rows, _ := result.RowsAffected(); rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) DeleteGmailConnection(ctx context.Context) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin Gmail disconnect: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM email_candidates`); err != nil {
+		return fmt.Errorf("delete Gmail candidates: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM gmail_connection WHERE id = 1`); err != nil {
+		return fmt.Errorf("delete Gmail connection: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit Gmail disconnect: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) SaveEmailCandidates(ctx context.Context, candidates []EmailCandidate) error {
+	if len(candidates) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin email candidate update: %w", err)
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC().Truncate(time.Second)
+	for _, candidate := range candidates {
+		if candidate.ID == "" {
+			candidate.ID = newID()
+		}
+		if candidate.CreatedAt.IsZero() {
+			candidate.CreatedAt = now
+		}
+		_, err := tx.ExecContext(ctx, `
+INSERT OR IGNORE INTO email_candidates (
+    id, message_id, tracking_number, description, sender, message_at, status, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+			candidate.ID, candidate.MessageID, candidate.TrackingNumber, candidate.Description,
+			candidate.Sender, candidate.MessageAt.UTC().Unix(), candidate.CreatedAt.UTC().Unix(), now.Unix(),
+		)
+		if err != nil {
+			return fmt.Errorf("save email candidate: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit email candidates: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ListEmailCandidates(ctx context.Context) ([]EmailCandidate, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, message_id, tracking_number, description, sender, message_at, created_at
+FROM email_candidates WHERE status = 'pending'
+ORDER BY message_at DESC, created_at DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("list email candidates: %w", err)
+	}
+	defer rows.Close()
+	candidates := make([]EmailCandidate, 0)
+	for rows.Next() {
+		candidate, err := scanEmailCandidate(rows)
+		if err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, candidate)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list email candidates: %w", err)
+	}
+	return candidates, nil
+}
+
+func (s *Store) EmailCandidate(ctx context.Context, id string) (EmailCandidate, error) {
+	return scanEmailCandidate(s.db.QueryRowContext(ctx, `
+SELECT id, message_id, tracking_number, description, sender, message_at, created_at
+FROM email_candidates WHERE id = ? AND status = 'pending'`, id))
+}
+
+func (s *Store) SetEmailCandidateStatus(ctx context.Context, id, status string) error {
+	if status != "accepted" && status != "dismissed" {
+		return fmt.Errorf("invalid email candidate status %q", status)
+	}
+	result, err := s.db.ExecContext(ctx, `
+UPDATE email_candidates SET status = ?, updated_at = ? WHERE id = ? AND status = 'pending'`,
+		status, time.Now().UTC().Unix(), id)
+	if err != nil {
+		return fmt.Errorf("update email candidate: %w", err)
+	}
+	if rows, _ := result.RowsAffected(); rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) CountEmailCandidates(ctx context.Context) (int, error) {
+	var count int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM email_candidates WHERE status = 'pending'`).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count email candidates: %w", err)
+	}
+	return count, nil
+}
+
 func (s *Store) packageByID(ctx context.Context, id string) (Package, error) {
 	pkg, err := scanPackage(s.db.QueryRowContext(ctx, `SELECT `+packageColumns+` FROM packages WHERE id = ?`, id))
 	if err != nil {
@@ -341,6 +575,20 @@ func scanPackage(row scanner) (Package, error) {
 	pkg.CreatedAt = time.Unix(created, 0).UTC()
 	pkg.UpdatedAt = time.Unix(updated, 0).UTC()
 	return pkg, nil
+}
+
+func scanEmailCandidate(row scanner) (EmailCandidate, error) {
+	var candidate EmailCandidate
+	var messageAt, createdAt int64
+	if err := row.Scan(
+		&candidate.ID, &candidate.MessageID, &candidate.TrackingNumber, &candidate.Description,
+		&candidate.Sender, &messageAt, &createdAt,
+	); err != nil {
+		return EmailCandidate{}, err
+	}
+	candidate.MessageAt = time.Unix(messageAt, 0).UTC()
+	candidate.CreatedAt = time.Unix(createdAt, 0).UTC()
+	return candidate, nil
 }
 
 func newID() string {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/cfbender/nimotsu/internal/api"
 	"github.com/cfbender/nimotsu/internal/config"
+	"github.com/cfbender/nimotsu/internal/gmail"
 	"github.com/cfbender/nimotsu/internal/push"
 	"github.com/cfbender/nimotsu/internal/seventeentrack"
 	"github.com/cfbender/nimotsu/internal/store"
@@ -22,6 +23,8 @@ import (
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	configuration := config.Load()
+	appContext, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	dataStore, err := store.Open(configuration.DataPath)
 	if err != nil {
@@ -39,13 +42,40 @@ func main() {
 
 	var pushSender *push.Sender
 	if configuration.FirebaseCredentials != "" {
-		pushSender, err = push.NewSender(context.Background(), configuration.FirebaseCredentials)
+		pushSender, err = push.NewSender(appContext, configuration.FirebaseCredentials)
 		if err != nil {
 			logger.Error("configure Firebase", "error", err)
 			os.Exit(1)
 		}
 	} else {
 		logger.Warn("Firebase is not configured; Android push notifications are disabled")
+	}
+
+	var gmailService *gmail.Service
+	gmailValues := []string{configuration.GmailClientID, configuration.GmailClientSecret, configuration.GmailPublicURL, configuration.EncryptionKey}
+	gmailValueCount := 0
+	for _, value := range gmailValues {
+		if value != "" {
+			gmailValueCount++
+		}
+	}
+	if gmailValueCount == len(gmailValues) {
+		gmailService, err = gmail.New(gmail.Config{
+			ClientID:      configuration.GmailClientID,
+			ClientSecret:  configuration.GmailClientSecret,
+			PublicURL:     configuration.GmailPublicURL,
+			EncryptionKey: configuration.EncryptionKey,
+		}, dataStore, logger)
+		if err != nil {
+			logger.Error("configure Gmail", "error", err)
+			os.Exit(1)
+		}
+		go gmailService.Run(appContext, 5*time.Minute)
+	} else if gmailValueCount > 0 {
+		logger.Error("Gmail configuration is incomplete; client ID, client secret, public URL, and encryption key are all required")
+		os.Exit(1)
+	} else {
+		logger.Warn("Gmail is not configured; email discovery is disabled")
 	}
 
 	onTrackingUpdate := func(pkg store.Package) {
@@ -67,7 +97,7 @@ func main() {
 		}
 	}
 
-	apiHandler := api.New(dataStore, trackingClient, configuration.APIToken, configuration.SeventeenTrackKey, onTrackingUpdate, logger)
+	apiHandler := api.New(dataStore, trackingClient, gmailService, configuration.APIToken, configuration.SeventeenTrackKey, onTrackingUpdate, logger)
 	handler := withStaticFiles(apiHandler, configuration.WebDir)
 	server := &http.Server{
 		Addr:              configuration.Listen,
@@ -76,10 +106,8 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 	}
 
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		<-stop
+		<-appContext.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = server.Shutdown(ctx)

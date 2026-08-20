@@ -57,12 +57,34 @@ h1 { margin-bottom: 0; font-family: ui-rounded, "Arial Rounded MT Bold", system-
 .empty-illustration svg { width: 60px; height: 60px; stroke-width: 1.3; transform: rotate(3deg); }
 .empty-state h2 { margin-bottom: 8px; font-family: ui-rounded, "Arial Rounded MT Bold", system-ui, sans-serif; font-size: 1.55rem; letter-spacing: -.035em; }
 .empty-state p { max-width: 300px; margin-bottom: 26px; color: var(--muted); line-height: 1.55; }
+.empty-state.compact { min-height: 38vh; }
+.empty-state.compact .empty-illustration { width: 84px; height: 84px; margin-bottom: 20px; border-radius: 26px; }
+.empty-state.compact .empty-illustration svg { width: 44px; height: 44px; }
 
 .primary-button, .secondary-button { min-height: 50px; padding: 0 22px; border-radius: 15px; font-weight: 700; cursor: pointer; }
 .primary-button { color: var(--on-green); border: 0; background: var(--green); box-shadow: 0 8px 20px var(--strong-shadow); }
 .primary-button:disabled { opacity: .6; cursor: wait; }
 .secondary-button { color: var(--green); border: 1px solid var(--green-border); background: var(--green-soft); }
 .full-width { width: 100%; }
+
+.candidate-section { margin-bottom: 26px; }
+.section-heading { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 12px; padding: 0 2px; }
+.section-heading h2 { margin: 0; font-family: ui-rounded, "Arial Rounded MT Bold", system-ui, sans-serif; font-size: 1.2rem; letter-spacing: -.035em; }
+.section-heading > span { display: grid; min-width: 27px; height: 27px; padding: 0 7px; place-items: center; color: var(--ink); border-radius: 9px; background: var(--green-soft); font-size: .72rem; font-weight: 800; }
+.candidate-list { display: grid; gap: 10px; }
+.candidate-card { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 12px; padding: 16px; border: 1px solid var(--green-border); border-radius: 19px; background: var(--paper); box-shadow: var(--shadow); }
+.candidate-icon { display: grid; width: 44px; height: 44px; place-items: center; color: var(--green); border-radius: 13px; background: var(--green-soft); }
+.candidate-icon svg { width: 21px; height: 21px; }
+.candidate-copy { min-width: 0; }
+.candidate-copy h3 { display: -webkit-box; overflow: hidden; margin: 1px 0 5px; font-size: .92rem; line-height: 1.3; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.candidate-copy p { display: flex; overflow: hidden; gap: 4px; margin-bottom: 9px; color: var(--muted); font-size: .7rem; white-space: nowrap; }
+.candidate-copy p span:first-child { overflow: hidden; text-overflow: ellipsis; }
+.candidate-copy p time { flex: 0 0 auto; }
+.candidate-copy code { display: block; overflow: hidden; padding: 6px 8px; border-radius: 8px; background: var(--raised); color: var(--ink); font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: .7rem; text-overflow: ellipsis; white-space: nowrap; }
+.candidate-actions { grid-column: 2; display: flex; align-items: center; gap: 8px; }
+.candidate-actions button { min-height: 38px; flex: 1; padding: 0 14px; border: 1px solid var(--line); border-radius: 11px; background: transparent; font-size: .74rem; font-weight: 700; cursor: pointer; }
+.candidate-actions .primary-button { color: var(--on-green); border-color: var(--green); background: var(--green); }
+.candidate-actions button:disabled { opacity: .6; cursor: wait; }
 
 .package-list { display: grid; gap: 14px; }
 .package-card { overflow: hidden; border: 1px solid var(--line); border-radius: 22px; background: var(--paper); box-shadow: var(--shadow); }
@@ -120,9 +142,11 @@ input::placeholder { color: var(--subtle); }
 .settings-section h3 { margin-bottom: 5px; font-size: .9rem; }
 .settings-section p { margin-bottom: 14px; color: var(--muted); font-size: .79rem; line-height: 1.45; }
 .settings-section .push-state { margin: 10px 0 0; text-align: center; }
-.coming-soon { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
-.coming-soon p { margin-bottom: 0; }
-.coming-soon > span { flex: 0 0 auto; padding: 5px 8px; color: var(--ink); border-radius: 8px; background: var(--raised); font-size: .65rem; font-weight: 700; text-transform: uppercase; }
+.gmail-settings strong { color: var(--ink); }
+.gmail-actions { display: grid; grid-template-columns: 1fr auto; gap: 9px; }
+.gmail-actions .secondary-button { min-height: 46px; }
+.text-button { min-height: 46px; padding: 0 10px; border: 0; background: transparent; font-size: .78rem; font-weight: 700; cursor: pointer; }
+.text-button.danger-action { color: var(--red); }
 
 @media (min-width: 640px) {
   .app-shell { padding-right: 28px; padding-left: 28px; }
