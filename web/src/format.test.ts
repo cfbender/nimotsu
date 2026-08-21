@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatCarrier, formatEstimatedDelivery, formatStatus } from './format'
+import { formatCarrier, formatEstimatedDelivery, formatStatus, getCarrierTrackingURL } from './format'
 
 describe('formatStatus', () => {
   it('uses friendly tracking labels', () => {
@@ -24,5 +24,17 @@ describe('formatStatus', () => {
 
   it('formats estimated delivery dates without shifting UTC midnight', () => {
     expect(formatEstimatedDelivery('2026-08-23T00:00:00Z')).toBe('Sun, Aug 23')
+  })
+})
+
+describe('getCarrierTrackingURL', () => {
+  it('builds an encoded carrier tracking link', () => {
+    expect(getCarrierTrackingURL('UPS', '1Z 999')).toBe('https://www.ups.com/track?loc=en_US&tracknum=1Z%20999')
+    expect(getCarrierTrackingURL('dhl-express', '1234567890')).toBe('https://www.dhl.com/us-en/home/tracking/tracking-express.html?submit=1&tracking-id=1234567890')
+  })
+
+  it('does not link unsupported carriers or empty tracking numbers', () => {
+    expect(getCarrierTrackingURL('other_carrier', '123')).toBeNull()
+    expect(getCarrierTrackingURL('usps', '  ')).toBeNull()
   })
 })

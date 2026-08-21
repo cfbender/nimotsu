@@ -1,5 +1,6 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { Browser } from '@capacitor/browser'
+import { Clipboard } from '@capacitor/clipboard'
 import {
   acceptEmailCandidate,
   addPackage,
@@ -25,7 +26,7 @@ import {
   type TrackingEvent,
   type TrackedPackage,
 } from './api'
-import { formatCarrier, formatEstimatedDelivery, formatEventDate, formatRelativeDate, formatStatus } from './format'
+import { formatCarrier, formatEstimatedDelivery, formatEventDate, formatRelativeDate, formatStatus, getCarrierTrackingURL } from './format'
 import { enablePushNotifications } from './push'
 import { getThemeMode, saveThemeMode, type ThemeMode } from './theme'
 
@@ -327,8 +328,16 @@ function PackageDetailSheet({
   const [description, setDescription] = useState(pkg.description)
   const [renameError, setRenameError] = useState('')
   const [savingName, setSavingName] = useState(false)
+  const [trackingCopied, setTrackingCopied] = useState(false)
+  const trackingURL = getCarrierTrackingURL(pkg.carrier, pkg.tracking_number)
 
   useEffect(() => setDescription(pkg.description), [pkg.description])
+
+  useEffect(() => {
+    if (!trackingCopied) return
+    const timeout = window.setTimeout(() => setTrackingCopied(false), 2_000)
+    return () => window.clearTimeout(timeout)
+  }, [trackingCopied])
 
   useEffect(() => {
     let active = true
@@ -361,6 +370,21 @@ function PackageDetailSheet({
       setRenameError(requestError instanceof Error ? requestError.message : 'Could not rename package')
     } finally {
       setSavingName(false)
+    }
+  }
+
+  function openTrackingPage(event: React.MouseEvent<HTMLAnchorElement>) {
+    if (!trackingURL || !isNative()) return
+    event.preventDefault()
+    void Browser.open({ url: trackingURL })
+  }
+
+  async function copyTrackingNumber() {
+    try {
+      await Clipboard.write({ string: pkg.tracking_number })
+      setTrackingCopied(true)
+    } catch {
+      setTrackingCopied(false)
     }
   }
 
@@ -399,7 +423,27 @@ function PackageDetailSheet({
       <dl className="shipment-facts">
         <div><dt>Carrier</dt><dd>{pkg.carrier ? formatCarrier(pkg.carrier) : 'Not detected'}</dd></div>
         <div><dt>Estimated delivery</dt><dd>{pkg.estimated_delivery_at ? formatEstimatedDelivery(pkg.estimated_delivery_at) : 'Not available yet'}</dd></div>
-        <div className="tracking-number-fact"><dt>Tracking number</dt><dd>{pkg.tracking_number}</dd></div>
+        <div className="tracking-number-fact">
+          <dt>Tracking number</dt>
+          <dd>
+            <span className="tracking-number-value">
+              {trackingURL ? (
+                <a href={trackingURL} target="_blank" rel="noreferrer" onClick={openTrackingPage}>
+                  {pkg.tracking_number}<ExternalLinkIcon />
+                </a>
+              ) : pkg.tracking_number}
+            </span>
+            <button
+              className="copy-tracking-button"
+              type="button"
+              aria-label={trackingCopied ? 'Tracking number copied' : 'Copy tracking number'}
+              title={trackingCopied ? 'Copied' : 'Copy tracking number'}
+              onClick={() => void copyTrackingNumber()}
+            >
+              {trackingCopied ? <CheckIcon /> : <CopyIcon />}
+            </button>
+          </dd>
+        </div>
       </dl>
 
       <div className="detail-actions">
@@ -997,6 +1041,18 @@ function ArchiveIcon() {
 
 function EditIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 20 4.2-1 10.6-10.6a2.1 2.1 0 0 0-3-3L5.2 16 4 20ZM14.5 6.7l2.8 2.8" /></svg>
+}
+
+function ExternalLinkIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9" /><path d="M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6" /></svg>
+}
+
+function CopyIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" /></svg>
+}
+
+function CheckIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>
 }
 
 function CloseIcon() {

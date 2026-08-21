@@ -47,6 +47,30 @@ export function formatCarrier(carrier: string): string {
   return known[carrier.toLowerCase()] ?? carrier.replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
 
+export function getCarrierTrackingURL(carrier: string, trackingNumber: string): string | null {
+  const number = encodeURIComponent(trackingNumber.trim())
+  const normalizedCarrier = carrier.trim().toLowerCase().replace(/[ -]+/g, '_')
+  const trackingPages: Record<string, string> = {
+    usps: 'https://tools.usps.com/go/TrackConfirmAction?tLabels=',
+    ups: 'https://www.ups.com/track?loc=en_US&tracknum=',
+    ups_mail_innovations: 'https://www.ups.com/track?loc=en_US&tracknum=',
+    fedex: 'https://www.fedex.com/fedextrack/?trknbr=',
+    fedex_smartpost: 'https://www.fedex.com/fedextrack/?trknbr=',
+    dhl_express: 'https://www.dhl.com/us-en/home/tracking/tracking-express.html?submit=1&tracking-id=',
+    dhl_ecommerce: 'https://webtrack.dhlglobalmail.com/?trackingnumber=',
+    ontrac: 'https://www.ontrac.com/tracking/?number=',
+    lasership: 'https://www.ontrac.com/tracking/?number=',
+    gls_us: 'https://www.gls-us.com/tracking?match=',
+    canada_post: 'https://www.canadapost-postescanada.ca/track-reperage/en#/details/',
+    royal_mail: 'https://www.royalmail.com/track-your-item#/tracking-results/',
+    australia_post: 'https://auspost.com.au/mypost/track/#/details/',
+    amazon: 'https://track.amazon.com/tracking/',
+    amazon_mws: 'https://track.amazon.com/tracking/',
+  }
+  const trackingPage = trackingPages[normalizedCarrier]
+  return trackingPage && number ? `${trackingPage}${number}` : null
+}
+
 export function formatEventDate(value: string): string {
   return new Date(value).toLocaleString(undefined, {
     month: 'short',

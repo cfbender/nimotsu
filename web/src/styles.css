@@ -199,6 +199,12 @@ input::placeholder { color: var(--subtle); }
 .shipment-facts dt { margin-bottom: 4px; color: var(--muted); font-size: .65rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
 .shipment-facts dd { overflow-wrap: anywhere; margin: 0; font-size: .78rem; font-weight: 650; }
 .shipment-facts .tracking-number-fact { grid-column: 1 / -1; }
+.tracking-number-fact dd { display: flex; align-items: center; gap: 9px; }
+.tracking-number-value { min-width: 0; overflow-wrap: anywhere; }
+.tracking-number-fact a { display: inline-flex; align-items: center; gap: 6px; color: var(--green); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.tracking-number-fact a svg { width: 14px; height: 14px; flex: 0 0 auto; }
+.copy-tracking-button { display: grid; width: 30px; height: 30px; flex: 0 0 auto; padding: 0; place-items: center; color: var(--green); border: 1px solid var(--green-border); border-radius: 9px; background: var(--green-soft); cursor: pointer; }
+.copy-tracking-button svg { width: 15px; height: 15px; }
 .detail-actions { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-top: 12px; }
 .detail-actions .secondary-button { display: flex; min-height: 44px; align-items: center; justify-content: center; gap: 7px; }
 .detail-actions .danger-action { padding: 0 14px; border: 1px solid var(--red-border); border-radius: 12px; background: var(--red-soft); }
