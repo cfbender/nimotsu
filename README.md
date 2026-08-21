@@ -39,7 +39,7 @@ Copy `.env.example` to `.env`. `scripts/dev` and Docker Compose load it automati
 
 | Variable | Purpose |
 | --- | --- |
-| `NIMOTSU_API_TOKEN` | Bearer token used by the web and Android clients. Strongly recommended outside a trusted network. |
+| `NIMOTSU_API_TOKEN` | Required. Bearer token used by the web and Android clients; the server refuses to start without it. |
 | `NIMOTSU_SHIPPO_API_TOKEN` | Shippo API token used to register tracking numbers. Use a live token for real packages. |
 | `NIMOTSU_SHIPPO_WEBHOOK_TOKEN` | Random secret included in the Shippo webhook URL to authenticate deliveries. |
 | `NIMOTSU_FIREBASE_CREDENTIALS` | Path to a Firebase service-account JSON file with FCM send access. |

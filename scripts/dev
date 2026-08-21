@@ -31,6 +31,11 @@ if [[ -f .env ]]; then
   done
 fi
 
+if [[ -z "${NIMOTSU_API_TOKEN:-}" ]]; then
+  export NIMOTSU_API_TOKEN="nimotsu-dev-token"
+  echo "NIMOTSU_API_TOKEN is not set; using development token 'nimotsu-dev-token' (enter it in Settings)" >&2
+fi
+
 api_port="${NIMOTSU_DEV_API_PORT:-$(python3 - <<'PY'
 import socket
 with socket.socket() as listener:

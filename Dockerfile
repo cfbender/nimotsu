@@ -22,7 +22,7 @@ RUN mise exec -- aube run build \
     && mkdir -p /out/data \
     && chown 65532:65532 /out/data
 
-FROM gcr.io/distroless/base-debian12:nonroot
+FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
 COPY --from=build /out/nimotsu /app/nimotsu
 COPY --from=build /src/web/dist /app/web

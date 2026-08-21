@@ -155,15 +155,18 @@ func decodeRegistration(responseBody []byte) (tracking.Registration, error) {
 	}, nil
 }
 
-func (c *Client) ParseWebhook(request *http.Request, body []byte) (tracking.Update, error) {
+func (c *Client) AuthenticateWebhook(request *http.Request) error {
 	if c.webhookToken == "" {
-		return tracking.Update{}, tracking.ErrWebhookNotConfigured
+		return tracking.ErrWebhookNotConfigured
 	}
 	provided := request.URL.Query().Get("token")
 	if len(provided) != len(c.webhookToken) || subtle.ConstantTimeCompare([]byte(provided), []byte(c.webhookToken)) != 1 {
-		return tracking.Update{}, tracking.ErrWebhookAuthentication
+		return tracking.ErrWebhookAuthentication
 	}
+	return nil
+}
 
+func (c *Client) ParseWebhook(_ *http.Request, body []byte) (tracking.Update, error) {
 	var webhook struct {
 		Event string       `json:"event"`
 		Data  trackPayload `json:"data"`

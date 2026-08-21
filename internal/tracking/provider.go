@@ -37,5 +37,6 @@ type Provider interface {
 	DetectCarrier(trackingNumber string) string
 	Register(ctx context.Context, trackingNumber, carrier string) (Registration, error)
 	Lookup(ctx context.Context, trackingNumber, carrier string) (Registration, error)
+	AuthenticateWebhook(request *http.Request) error
 	ParseWebhook(request *http.Request, body []byte) (Update, error)
 }

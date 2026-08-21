@@ -531,6 +531,17 @@ func (s *Server) trackingWebhook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "tracking provider is not configured")
 		return
 	}
+	switch err := s.tracker.AuthenticateWebhook(r); {
+	case errors.Is(err, tracking.ErrWebhookNotConfigured):
+		writeError(w, http.StatusServiceUnavailable, "tracking webhooks are not configured")
+		return
+	case errors.Is(err, tracking.ErrWebhookAuthentication):
+		writeError(w, http.StatusUnauthorized, "invalid webhook authentication")
+		return
+	case err != nil:
+		s.internalError(w, "authenticate tracking webhook", err)
+		return
+	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 2<<20))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid webhook body")
@@ -540,12 +551,6 @@ func (s *Server) trackingWebhook(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, tracking.ErrIgnoredWebhook):
 		w.WriteHeader(http.StatusOK)
-		return
-	case errors.Is(err, tracking.ErrWebhookNotConfigured):
-		writeError(w, http.StatusServiceUnavailable, "tracking webhooks are not configured")
-		return
-	case errors.Is(err, tracking.ErrWebhookAuthentication):
-		writeError(w, http.StatusUnauthorized, "invalid webhook authentication")
 		return
 	case errors.Is(err, tracking.ErrInvalidWebhook):
 		writeError(w, http.StatusBadRequest, "invalid tracking webhook")

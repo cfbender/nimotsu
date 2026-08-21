@@ -139,6 +139,9 @@ func TestParseWebhookAuthenticatesTokenAndNormalizesUpdate(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/api/webhooks/tracking?token=webhook-token", strings.NewReader(string(body)))
 	client := New("test-token", "webhook-token")
 
+	if err := client.AuthenticateWebhook(request); err != nil {
+		t.Fatal(err)
+	}
 	update, err := client.ParseWebhook(request, body)
 	if err != nil {
 		t.Fatal(err)
@@ -154,11 +157,18 @@ func TestParseWebhookAuthenticatesTokenAndNormalizesUpdate(t *testing.T) {
 	}
 }
 
-func TestParseWebhookRejectsWrongToken(t *testing.T) {
-	body := []byte(`{"event":"track_updated"}`)
-	request := httptest.NewRequest(http.MethodPost, "/api/webhooks/tracking?token=wrong", strings.NewReader(string(body)))
+func TestAuthenticateWebhookRejectsWrongToken(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/api/webhooks/tracking?token=wrong", nil)
 	client := New("test-token", "webhook-token")
-	if _, err := client.ParseWebhook(request, body); !errors.Is(err, tracking.ErrWebhookAuthentication) {
+	if err := client.AuthenticateWebhook(request); !errors.Is(err, tracking.ErrWebhookAuthentication) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestAuthenticateWebhookRequiresConfiguredToken(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/api/webhooks/tracking?token=webhook-token", nil)
+	client := New("test-token", "")
+	if err := client.AuthenticateWebhook(request); !errors.Is(err, tracking.ErrWebhookNotConfigured) {
 		t.Fatalf("error = %v", err)
 	}
 }

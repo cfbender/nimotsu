@@ -23,6 +23,7 @@ type fakeProvider struct {
 	registration    tracking.Registration
 	registrationErr error
 	update          tracking.Update
+	webhookAuthErr  error
 	webhookErr      error
 	registerCalls   []trackingRequest
 	lookupCalls     []trackingRequest
@@ -56,6 +57,10 @@ func (f *fakeProvider) Lookup(_ context.Context, number, carrier string) (tracki
 	defer f.mu.Unlock()
 	f.lookupCalls = append(f.lookupCalls, trackingRequest{number: number, carrier: carrier})
 	return f.registration, f.registrationErr
+}
+
+func (f *fakeProvider) AuthenticateWebhook(_ *http.Request) error {
+	return f.webhookAuthErr
 }
 
 func (f *fakeProvider) ParseWebhook(_ *http.Request, _ []byte) (tracking.Update, error) {

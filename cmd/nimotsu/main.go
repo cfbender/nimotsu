@@ -27,6 +27,11 @@ func main() {
 	appContext, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	if configuration.APIToken == "" {
+		logger.Error("NIMOTSU_API_TOKEN is required; refusing to start without API authentication")
+		os.Exit(1)
+	}
+
 	dataStore, err := store.Open(configuration.DataPath)
 	if err != nil {
 		logger.Error("open data store", "error", err)

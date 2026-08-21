@@ -51,6 +51,10 @@ func reconciliationRegistration(number string) tracking.Registration {
 	}, History: []tracking.Update{{Status: "PreTransit", LatestMessage: "Label created", Location: "Phoenix, AZ 85001, US", LastEventAt: &historyAt}}}
 }
 
+func (*reconciliationProvider) AuthenticateWebhook(_ *http.Request) error {
+	return nil
+}
+
 func (*reconciliationProvider) ParseWebhook(_ *http.Request, _ []byte) (tracking.Update, error) {
 	return tracking.Update{}, nil
 }
