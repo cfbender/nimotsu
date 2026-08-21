@@ -132,6 +132,67 @@ func TestRenamePackage(t *testing.T) {
 	}
 }
 
+func TestNotificationDefaultsAndPackageCustomization(t *testing.T) {
+	dataStore := openTestStore(t)
+	handler := New(dataStore, nil, nil, "", nil, nil, testLogger())
+
+	defaultsRequest := httptest.NewRequest(http.MethodPatch, "/api/settings/notifications", bytes.NewBufferString(`{
+        "notifications_enabled":true,
+        "notify_in_transit":false,
+        "notify_out_for_delivery":true,
+        "notify_delivered":true,
+        "notify_exceptions":false
+    }`))
+	defaultsRequest.Header.Set("Content-Type", "application/json")
+	defaultsResponse := httptest.NewRecorder()
+	handler.ServeHTTP(defaultsResponse, defaultsRequest)
+	if defaultsResponse.Code != http.StatusOK {
+		t.Fatalf("update defaults status = %d, body = %s", defaultsResponse.Code, defaultsResponse.Body.String())
+	}
+
+	createdResponse := postJSON(handler, "/api/packages", `{"description":"Headphones","tracking_number":"1Z999AA10123456784"}`)
+	if createdResponse.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, body = %s", createdResponse.Code, createdResponse.Body.String())
+	}
+	var created store.Package
+	if err := json.Unmarshal(createdResponse.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.NotifyInTransit || !created.NotifyOutForDelivery || !created.NotifyDelivered || created.NotifyExceptions {
+		t.Fatalf("created package did not inherit defaults: %+v", created.NotificationSettings)
+	}
+
+	customizeRequest := httptest.NewRequest(http.MethodPatch, "/api/packages/"+created.ID, bytes.NewBufferString(`{
+        "notification_settings":{
+            "notifications_enabled":true,
+            "notify_in_transit":true,
+            "notify_out_for_delivery":false,
+            "notify_delivered":false,
+            "notify_exceptions":true
+        }
+    }`))
+	customizeRequest.Header.Set("Content-Type", "application/json")
+	customizeResponse := httptest.NewRecorder()
+	handler.ServeHTTP(customizeResponse, customizeRequest)
+	if customizeResponse.Code != http.StatusOK {
+		t.Fatalf("customize package status = %d, body = %s", customizeResponse.Code, customizeResponse.Body.String())
+	}
+	var customized store.Package
+	if err := json.Unmarshal(customizeResponse.Body.Bytes(), &customized); err != nil {
+		t.Fatal(err)
+	}
+	if !customized.NotifyInTransit || customized.NotifyOutForDelivery || customized.NotifyDelivered || !customized.NotifyExceptions {
+		t.Fatalf("customized package settings = %+v", customized.NotificationSettings)
+	}
+
+	getDefaultsRequest := httptest.NewRequest(http.MethodGet, "/api/settings/notifications", nil)
+	getDefaultsResponse := httptest.NewRecorder()
+	handler.ServeHTTP(getDefaultsResponse, getDefaultsRequest)
+	if getDefaultsResponse.Code != http.StatusOK || getDefaultsResponse.Body.String() != defaultsResponse.Body.String() {
+		t.Fatalf("get defaults response = %d %s, want %s", getDefaultsResponse.Code, getDefaultsResponse.Body.String(), defaultsResponse.Body.String())
+	}
+}
+
 func TestCreateAndRestorePackageRegistersWithProvider(t *testing.T) {
 	dataStore := openTestStore(t)
 	estimatedDeliveryAt := time.Date(2026, 8, 23, 0, 0, 0, 0, time.UTC)
@@ -521,6 +582,59 @@ func TestTrackingWebhookIsIdempotent(t *testing.T) {
 	case notification := <-notifications:
 		t.Fatalf("duplicate webhook triggered notification: %+v", notification)
 	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestTrackingWebhookHonorsPackageNotificationCategories(t *testing.T) {
+	dataStore := openTestStore(t)
+	pkg, err := dataStore.CreatePackage(t.Context(), store.NewPackage{
+		Description: "Headphones", TrackingNumber: "9400110898825022579493", Status: "PreTransit",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dataStore.SetPackageNotificationSettings(t.Context(), pkg.ID, store.NotificationSettings{
+		NotificationsEnabled: true,
+		NotifyDelivered:      true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	eventAt := time.Date(2026, 8, 20, 14, 30, 0, 0, time.UTC)
+	provider := &fakeProvider{update: tracking.Update{
+		TrackingNumber: pkg.TrackingNumber,
+		Carrier:        "USPS",
+		Status:         "OutForDelivery",
+		LatestMessage:  "Out for delivery",
+		LastEventAt:    &eventAt,
+	}}
+	notifications := make(chan store.Package, 1)
+	handler := New(dataStore, provider, nil, "", func(updated store.Package) { notifications <- updated }, nil, testLogger())
+
+	response := postJSON(handler, "/api/webhooks/tracking", `{}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("out-for-delivery status = %d, body = %s", response.Code, response.Body.String())
+	}
+	select {
+	case notification := <-notifications:
+		t.Fatalf("disabled category triggered notification: %+v", notification)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	deliveredAt := eventAt.Add(time.Hour)
+	provider.update.Status = "Delivered"
+	provider.update.LatestMessage = "Delivered"
+	provider.update.LastEventAt = &deliveredAt
+	response = postJSON(handler, "/api/webhooks/tracking", `{}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("delivered status = %d, body = %s", response.Code, response.Body.String())
+	}
+	select {
+	case notification := <-notifications:
+		if notification.Status != "Delivered" {
+			t.Fatalf("notification = %+v", notification)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("enabled delivery category did not trigger a notification")
 	}
 }
 

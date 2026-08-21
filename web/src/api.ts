@@ -3,7 +3,15 @@ import { Capacitor } from '@capacitor/core'
 const serverURLKey = 'nimotsu.serverURL'
 const apiTokenKey = 'nimotsu.apiToken'
 
-export interface TrackedPackage {
+export interface NotificationSettings {
+  notifications_enabled: boolean
+  notify_in_transit: boolean
+  notify_out_for_delivery: boolean
+  notify_delivered: boolean
+  notify_exceptions: boolean
+}
+
+export interface TrackedPackage extends NotificationSettings {
   id: string
   description: string
   tracking_number: string
@@ -15,7 +23,6 @@ export interface TrackedPackage {
   estimated_delivery_at: string | null
   last_event_at: string | null
   tracking_error: string
-  notifications_enabled: boolean
   created_at: string
   updated_at: string
 }
@@ -103,10 +110,21 @@ export async function addPackage(input: {
   })
 }
 
-export async function setPackageNotifications(id: string, enabled: boolean): Promise<TrackedPackage> {
+export async function setPackageNotificationSettings(id: string, settings: NotificationSettings): Promise<TrackedPackage> {
   return request<TrackedPackage>(`/api/packages/${id}`, {
     method: 'PATCH',
-    body: JSON.stringify({ notifications_enabled: enabled }),
+    body: JSON.stringify({ notification_settings: settings }),
+  })
+}
+
+export async function getNotificationDefaults(): Promise<NotificationSettings> {
+  return request<NotificationSettings>('/api/settings/notifications')
+}
+
+export async function updateNotificationDefaults(settings: NotificationSettings): Promise<NotificationSettings> {
+  return request<NotificationSettings>('/api/settings/notifications', {
+    method: 'PATCH',
+    body: JSON.stringify(settings),
   })
 }
 

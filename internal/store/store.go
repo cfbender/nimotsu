@@ -21,24 +21,48 @@ type Store struct {
 	db *sql.DB
 }
 
+type NotificationSettings struct {
+	NotificationsEnabled bool `json:"notifications_enabled"`
+	NotifyInTransit      bool `json:"notify_in_transit"`
+	NotifyOutForDelivery bool `json:"notify_out_for_delivery"`
+	NotifyDelivered      bool `json:"notify_delivered"`
+	NotifyExceptions     bool `json:"notify_exceptions"`
+}
+
+func (settings NotificationSettings) Allows(status string) bool {
+	if !settings.NotificationsEnabled {
+		return false
+	}
+	switch status {
+	case "OutForDelivery", "AvailableForPickup":
+		return settings.NotifyOutForDelivery
+	case "Delivered":
+		return settings.NotifyDelivered
+	case "NotFound", "Expired", "DeliveryFailure", "Failure", "Exception", "Error", "ReturnToSender", "Returned", "Cancelled":
+		return settings.NotifyExceptions
+	default:
+		return settings.NotifyInTransit
+	}
+}
+
 type Package struct {
-	ID                   string     `json:"id"`
-	Description          string     `json:"description"`
-	TrackingNumber       string     `json:"tracking_number"`
-	Carrier              string     `json:"carrier"`
-	TrackingProvider     string     `json:"-"`
-	TrackingProviderID   string     `json:"-"`
-	Status               string     `json:"status"`
-	SubStatus            string     `json:"sub_status"`
-	LatestMessage        string     `json:"latest_message"`
-	LatestLocation       string     `json:"latest_location"`
-	EstimatedDeliveryAt  *time.Time `json:"estimated_delivery_at"`
-	LastEventAt          *time.Time `json:"last_event_at"`
-	TrackingError        string     `json:"tracking_error"`
-	NotificationsEnabled bool       `json:"notifications_enabled"`
-	Archived             bool       `json:"archived"`
-	CreatedAt            time.Time  `json:"created_at"`
-	UpdatedAt            time.Time  `json:"updated_at"`
+	ID                  string     `json:"id"`
+	Description         string     `json:"description"`
+	TrackingNumber      string     `json:"tracking_number"`
+	Carrier             string     `json:"carrier"`
+	TrackingProvider    string     `json:"-"`
+	TrackingProviderID  string     `json:"-"`
+	Status              string     `json:"status"`
+	SubStatus           string     `json:"sub_status"`
+	LatestMessage       string     `json:"latest_message"`
+	LatestLocation      string     `json:"latest_location"`
+	EstimatedDeliveryAt *time.Time `json:"estimated_delivery_at"`
+	LastEventAt         *time.Time `json:"last_event_at"`
+	TrackingError       string     `json:"tracking_error"`
+	NotificationSettings
+	Archived  bool      `json:"archived"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type NewPackage struct {
@@ -98,6 +122,7 @@ type EmailCandidate struct {
 const packageColumns = `
 	id, description, tracking_number, carrier, tracking_provider, tracking_provider_id, status, sub_status,
 	latest_message, latest_location, estimated_delivery_at, last_event_at, tracking_error, notifications_enabled,
+	notify_in_transit, notify_out_for_delivery, notify_delivered, notify_exceptions,
 	archived, created_at, updated_at`
 
 func Open(path string) (*Store, error) {
@@ -144,12 +169,13 @@ type scanner interface {
 func scanPackage(row scanner) (Package, error) {
 	var pkg Package
 	var estimatedDelivery, lastEvent sql.NullInt64
-	var notifications, archived int
+	var notificationsEnabled, notifyInTransit, notifyOutForDelivery, notifyDelivered, notifyExceptions, archived int
 	var created, updated int64
 	if err := row.Scan(
 		&pkg.ID, &pkg.Description, &pkg.TrackingNumber, &pkg.Carrier, &pkg.TrackingProvider, &pkg.TrackingProviderID, &pkg.Status,
 		&pkg.SubStatus, &pkg.LatestMessage, &pkg.LatestLocation, &estimatedDelivery, &lastEvent, &pkg.TrackingError,
-		&notifications, &archived, &created, &updated,
+		&notificationsEnabled, &notifyInTransit, &notifyOutForDelivery, &notifyDelivered, &notifyExceptions,
+		&archived, &created, &updated,
 	); err != nil {
 		return Package{}, err
 	}
@@ -161,7 +187,13 @@ func scanPackage(row scanner) (Package, error) {
 		value := time.Unix(lastEvent.Int64, 0).UTC()
 		pkg.LastEventAt = &value
 	}
-	pkg.NotificationsEnabled = notifications != 0
+	pkg.NotificationSettings = NotificationSettings{
+		NotificationsEnabled: notificationsEnabled != 0,
+		NotifyInTransit:      notifyInTransit != 0,
+		NotifyOutForDelivery: notifyOutForDelivery != 0,
+		NotifyDelivered:      notifyDelivered != 0,
+		NotifyExceptions:     notifyExceptions != 0,
+	}
 	pkg.Archived = archived != 0
 	pkg.CreatedAt = time.Unix(created, 0).UTC()
 	pkg.UpdatedAt = time.Unix(updated, 0).UTC()

@@ -42,6 +42,8 @@ func New(dataStore *store.Store, trackerClient tracking.Provider, gmailService *
 	mux.Handle("GET /api/tracking/carrier", server.authorize(http.HandlerFunc(server.detectCarrier)))
 	mux.Handle("POST /api/devices", server.authorize(http.HandlerFunc(server.registerDevice)))
 	mux.Handle("POST /api/notifications/test", server.authorize(http.HandlerFunc(server.testNotification)))
+	mux.Handle("GET /api/settings/notifications", server.authorize(http.HandlerFunc(server.getNotificationDefaults)))
+	mux.Handle("PATCH /api/settings/notifications", server.authorize(http.HandlerFunc(server.updateNotificationDefaults)))
 	mux.Handle("GET /api/gmail/status", server.authorize(http.HandlerFunc(server.gmailStatus)))
 	mux.Handle("POST /api/gmail/oauth/start", server.authorize(http.HandlerFunc(server.startGmailOAuth)))
 	mux.HandleFunc("GET /api/gmail/oauth/callback", server.completeGmailOAuth)

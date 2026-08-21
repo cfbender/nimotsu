@@ -9,8 +9,9 @@ import {
   listPackages,
   refreshTracking,
   renamePackage,
-  setPackageNotifications,
+  setPackageNotificationSettings,
   type EmailCandidate,
+  type NotificationSettings,
   type TrackedPackage,
 } from './api'
 import { formatCarrier, formatEstimatedDelivery, formatRelativeDate, formatStatus } from './format'
@@ -22,6 +23,13 @@ import { SettingsSheet } from './SettingsSheet'
 import { BellIcon, ChevronIcon, LocationIcon, PackageIcon, PlusIcon, RefreshIcon, SettingsIcon } from './icons'
 
 type Sheet = 'add' | 'settings' | null
+
+function notificationLabel(pkg: TrackedPackage): string {
+  if (!pkg.notifications_enabled) return 'Updates off'
+  const choices = [pkg.notify_in_transit, pkg.notify_out_for_delivery, pkg.notify_delivered, pkg.notify_exceptions]
+  if (!choices.some(Boolean)) return 'No alerts selected'
+  return choices.every(Boolean) ? 'Updates on' : 'Custom alerts'
+}
 
 export default function App() {
   const [packages, setPackages] = useState<TrackedPackage[]>([])
@@ -112,11 +120,21 @@ export default function App() {
     setPullDistance(0)
   }
 
+  async function updatePackageNotifications(pkg: TrackedPackage, settings: NotificationSettings) {
+    const updated = await setPackageNotificationSettings(pkg.id, settings)
+    setPackages((current) => current.map((item) => (item.id === updated.id ? updated : item)))
+    setSelectedPackage((current) => current?.id === updated.id ? updated : current)
+  }
+
   async function toggleNotifications(pkg: TrackedPackage) {
     try {
-      const updated = await setPackageNotifications(pkg.id, !pkg.notifications_enabled)
-      setPackages((current) => current.map((item) => (item.id === updated.id ? updated : item)))
-      setSelectedPackage((current) => current?.id === updated.id ? updated : current)
+      await updatePackageNotifications(pkg, {
+        notifications_enabled: !pkg.notifications_enabled,
+        notify_in_transit: pkg.notify_in_transit,
+        notify_out_for_delivery: pkg.notify_out_for_delivery,
+        notify_delivered: pkg.notify_delivered,
+        notify_exceptions: pkg.notify_exceptions,
+      })
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Could not update notifications')
     }
@@ -239,7 +257,7 @@ export default function App() {
                     <div className="card-actions">
                       <button type="button" onClick={() => void toggleNotifications(pkg)} aria-pressed={pkg.notifications_enabled}>
                         <BellIcon enabled={pkg.notifications_enabled} />
-                        {pkg.notifications_enabled ? 'Updates on' : 'Updates off'}
+                        {notificationLabel(pkg)}
                       </button>
                       <button className="danger-action" type="button" onClick={() => setArchiveTarget(pkg)}>Archive</button>
                     </div>
@@ -281,7 +299,7 @@ export default function App() {
           pkg={selectedPackage}
           onClose={() => setSelectedPackage(null)}
           onRename={(description) => renameTrackedPackage(selectedPackage, description)}
-          onToggleNotifications={() => void toggleNotifications(selectedPackage)}
+          onUpdateNotifications={(settings) => updatePackageNotifications(selectedPackage, settings)}
           onArchive={() => setArchiveTarget(selectedPackage)}
         />
       )}

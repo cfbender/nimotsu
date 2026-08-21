@@ -1,22 +1,23 @@
 import { FormEvent, useEffect, useState } from 'react'
 import { Browser } from '@capacitor/browser'
 import { Clipboard } from '@capacitor/clipboard'
-import { isNative, listTrackingEvents, type TrackingEvent, type TrackedPackage } from './api'
+import { isNative, listTrackingEvents, type NotificationSettings, type TrackingEvent, type TrackedPackage } from './api'
 import { formatCarrier, formatEstimatedDelivery, formatEventDate, formatStatus, getCarrierTrackingURL } from './format'
+import { NotificationSettingsControls } from './NotificationSettingsControls'
 import { Sheet } from './Sheet'
-import { BellIcon, CheckIcon, ClockIcon, CopyIcon, EditIcon, ExternalLinkIcon, LocationIcon, PackageIcon } from './icons'
+import { CheckIcon, ClockIcon, CopyIcon, EditIcon, ExternalLinkIcon, LocationIcon, PackageIcon } from './icons'
 
 export function PackageDetailSheet({
   pkg,
   onClose,
   onRename,
-  onToggleNotifications,
+  onUpdateNotifications,
   onArchive,
 }: {
   pkg: TrackedPackage
   onClose: () => void
   onRename: (description: string) => Promise<void>
-  onToggleNotifications: () => void
+  onUpdateNotifications: (settings: NotificationSettings) => Promise<void>
   onArchive: () => void
 }) {
   const [events, setEvents] = useState<TrackingEvent[]>([])
@@ -27,6 +28,8 @@ export function PackageDetailSheet({
   const [renameError, setRenameError] = useState('')
   const [savingName, setSavingName] = useState(false)
   const [trackingCopied, setTrackingCopied] = useState(false)
+  const [savingNotifications, setSavingNotifications] = useState(false)
+  const [notificationError, setNotificationError] = useState('')
   const trackingURL = getCarrierTrackingURL(pkg.carrier, pkg.tracking_number)
 
   useEffect(() => setDescription(pkg.description), [pkg.description])
@@ -83,6 +86,18 @@ export function PackageDetailSheet({
       setTrackingCopied(true)
     } catch {
       setTrackingCopied(false)
+    }
+  }
+
+  async function updateNotifications(settings: NotificationSettings) {
+    setSavingNotifications(true)
+    setNotificationError('')
+    try {
+      await onUpdateNotifications(settings)
+    } catch (requestError) {
+      setNotificationError(requestError instanceof Error ? requestError.message : 'Could not update notifications')
+    } finally {
+      setSavingNotifications(false)
     }
   }
 
@@ -144,12 +159,21 @@ export function PackageDetailSheet({
         </div>
       </dl>
 
-      <div className="detail-actions">
-        <button className="secondary-button" type="button" aria-pressed={pkg.notifications_enabled} onClick={onToggleNotifications}>
-          <BellIcon enabled={pkg.notifications_enabled} />
-          {pkg.notifications_enabled ? 'Updates on' : 'Updates off'}
-        </button>
-        <button className="text-button danger-action" type="button" onClick={onArchive}>Archive</button>
+      <section className="package-notification-section" aria-labelledby="package-notification-heading">
+        <div>
+          <h3 id="package-notification-heading">Notifications</h3>
+          <p>Choose which updates you want for this package.</p>
+        </div>
+        <NotificationSettingsControls
+          settings={pkg}
+          disabled={savingNotifications}
+          onChange={(settings) => void updateNotifications(settings)}
+        />
+        {notificationError && <p className="form-error" role="alert">{notificationError}</p>}
+      </section>
+
+      <div className="detail-actions archive-only">
+        <button className="text-button danger-action" type="button" onClick={onArchive}>Archive package</button>
       </div>
 
       <section className="history-section" aria-labelledby="history-heading">

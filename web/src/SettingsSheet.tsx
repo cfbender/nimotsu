@@ -5,15 +5,19 @@ import {
   disconnectGmail,
   getConnectionSettings,
   getGmailStatus,
+  getNotificationDefaults,
   isNative,
   saveConnectionSettings,
   sendTestNotification,
   syncGmail,
+  updateNotificationDefaults,
   type GmailStatus,
+  type NotificationSettings,
 } from './api'
 import { enablePushNotifications } from './push'
 import { getThemeMode, saveThemeMode, type ThemeMode } from './theme'
 import { ConfirmDialog } from './ConfirmDialog'
+import { NotificationSettingsControls } from './NotificationSettingsControls'
 import { Sheet } from './Sheet'
 
 export function SettingsSheet({
@@ -35,9 +39,13 @@ export function SettingsSheet({
   const [gmailAction, setGmailAction] = useState('')
   const [confirmDisconnect, setConfirmDisconnect] = useState(false)
   const [disconnecting, setDisconnecting] = useState(false)
+  const [notificationDefaults, setNotificationDefaults] = useState<NotificationSettings | null>(null)
+  const [notificationDefaultsState, setNotificationDefaultsState] = useState('')
+  const [savingNotificationDefaults, setSavingNotificationDefaults] = useState(false)
 
   useEffect(() => {
     void refreshGmailStatus()
+    void refreshNotificationDefaults()
   }, [])
 
   function save(event: FormEvent) {
@@ -79,6 +87,31 @@ export function SettingsSheet({
   function selectTheme(mode: ThemeMode) {
     setThemeMode(mode)
     saveThemeMode(mode)
+  }
+
+  async function refreshNotificationDefaults() {
+    try {
+      setNotificationDefaults(await getNotificationDefaults())
+      setNotificationDefaultsState('')
+    } catch (error) {
+      setNotificationDefaultsState(error instanceof Error ? error.message : 'Could not read notification defaults')
+    }
+  }
+
+  async function saveNotificationDefaults(settings: NotificationSettings) {
+    const previous = notificationDefaults
+    setNotificationDefaults(settings)
+    setSavingNotificationDefaults(true)
+    setNotificationDefaultsState('Saving…')
+    try {
+      setNotificationDefaults(await updateNotificationDefaults(settings))
+      setNotificationDefaultsState('Defaults saved')
+    } catch (error) {
+      setNotificationDefaults(previous)
+      setNotificationDefaultsState(error instanceof Error ? error.message : 'Could not save notification defaults')
+    } finally {
+      setSavingNotificationDefaults(false)
+    }
   }
 
   async function refreshGmailStatus() {
@@ -168,6 +201,22 @@ export function SettingsSheet({
         </label>
         <button className="primary-button full-width" type="submit">Save connection</button>
       </form>
+      <div className="settings-section notification-defaults-section">
+        <h3>New package notifications</h3>
+        <p>These choices apply when you add or accept a new package. Existing packages keep their own settings.</p>
+        {notificationDefaults ? (
+          <NotificationSettingsControls
+            settings={notificationDefaults}
+            disabled={savingNotificationDefaults}
+            onChange={(settings) => void saveNotificationDefaults(settings)}
+          />
+        ) : notificationDefaultsState ? (
+          <p className="form-error" role="alert">{notificationDefaultsState}</p>
+        ) : (
+          <p>Loading notification defaults…</p>
+        )}
+        {notificationDefaults && notificationDefaultsState && <p className="push-state" role="status">{notificationDefaultsState}</p>}
+      </div>
       {isNative() && (
         <div className="settings-section">
           <h3>Push notifications</h3>

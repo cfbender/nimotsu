@@ -26,6 +26,10 @@ CREATE TABLE IF NOT EXISTS packages (
     last_event_at INTEGER,
     tracking_error TEXT NOT NULL DEFAULT '',
     notifications_enabled INTEGER NOT NULL DEFAULT 1,
+    notify_in_transit INTEGER NOT NULL DEFAULT 1,
+    notify_out_for_delivery INTEGER NOT NULL DEFAULT 1,
+    notify_delivered INTEGER NOT NULL DEFAULT 1,
+    notify_exceptions INTEGER NOT NULL DEFAULT 1,
     archived INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
@@ -49,6 +53,20 @@ CREATE TABLE IF NOT EXISTS devices (
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS notification_defaults (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    notifications_enabled INTEGER NOT NULL,
+    notify_in_transit INTEGER NOT NULL,
+    notify_out_for_delivery INTEGER NOT NULL,
+    notify_delivered INTEGER NOT NULL,
+    notify_exceptions INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+INSERT OR IGNORE INTO notification_defaults (
+    id, notifications_enabled, notify_in_transit, notify_out_for_delivery, notify_delivered, notify_exceptions, updated_at
+) VALUES (1, 1, 1, 1, 1, 1, unixepoch());
 
 CREATE TABLE IF NOT EXISTS gmail_connection (
     id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -116,6 +134,14 @@ func (s *Store) ensurePackageTrackingColumns(ctx context.Context) error {
 			continue
 		}
 		if _, err := s.db.ExecContext(ctx, `ALTER TABLE packages ADD COLUMN `+column+` TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("add package %s: %w", column, err)
+		}
+	}
+	for _, column := range []string{"notify_in_transit", "notify_out_for_delivery", "notify_delivered", "notify_exceptions"} {
+		if columns[column] {
+			continue
+		}
+		if _, err := s.db.ExecContext(ctx, `ALTER TABLE packages ADD COLUMN `+column+` INTEGER NOT NULL DEFAULT 1`); err != nil {
 			return fmt.Errorf("add package %s: %w", column, err)
 		}
 	}

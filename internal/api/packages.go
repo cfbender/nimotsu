@@ -53,7 +53,7 @@ func (s *Server) refreshTracking(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		refreshed++
-		if changed && updated.NotificationsEnabled && s.onTrackingUpdate != nil {
+		if changed && updated.Allows(updated.Status) && s.onTrackingUpdate != nil {
 			go s.onTrackingUpdate(updated)
 		}
 	}
@@ -176,14 +176,15 @@ func (s *Server) savePackage(ctx context.Context, description, trackingNumber, r
 
 func (s *Server) updatePackage(w http.ResponseWriter, r *http.Request) {
 	var request struct {
-		Description          *string `json:"description"`
-		NotificationsEnabled *bool   `json:"notifications_enabled"`
+		Description          *string                     `json:"description"`
+		NotificationsEnabled *bool                       `json:"notifications_enabled"`
+		NotificationSettings *store.NotificationSettings `json:"notification_settings"`
 	}
 	if err := readJSON(w, r, &request); err != nil {
 		return
 	}
-	if request.Description == nil && request.NotificationsEnabled == nil {
-		writeError(w, http.StatusBadRequest, "description or notifications_enabled is required")
+	if request.Description == nil && request.NotificationsEnabled == nil && request.NotificationSettings == nil {
+		writeError(w, http.StatusBadRequest, "description or notification settings are required")
 		return
 	}
 	var pkg store.Package
@@ -198,6 +199,9 @@ func (s *Server) updatePackage(w http.ResponseWriter, r *http.Request) {
 	}
 	if err == nil && request.NotificationsEnabled != nil {
 		pkg, err = s.store.SetNotifications(r.Context(), r.PathValue("id"), *request.NotificationsEnabled)
+	}
+	if err == nil && request.NotificationSettings != nil {
+		pkg, err = s.store.SetPackageNotificationSettings(r.Context(), r.PathValue("id"), *request.NotificationSettings)
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "package not found")
@@ -274,7 +278,7 @@ func (s *Server) trackingWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	if changed && pkg.NotificationsEnabled && s.onTrackingUpdate != nil {
+	if changed && pkg.Allows(pkg.Status) && s.onTrackingUpdate != nil {
 		go s.onTrackingUpdate(pkg)
 	}
 }

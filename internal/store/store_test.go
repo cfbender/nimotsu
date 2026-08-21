@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -114,6 +115,70 @@ func TestPackageLifecycle(t *testing.T) {
 	}
 	if len(packages) != 1 || packages[0].ID != pkg.ID {
 		t.Fatalf("packages after restore = %+v", packages)
+	}
+}
+
+func TestNotificationDefaultsAndPackageOverrides(t *testing.T) {
+	dataStore, err := Open(filepath.Join(t.TempDir(), "nimotsu.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dataStore.Close()
+
+	existing, err := dataStore.CreatePackage(t.Context(), NewPackage{
+		Description: "Existing package", TrackingNumber: "1Z999AA10123456784", Status: "InTransit",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	allUpdates := NotificationSettings{true, true, true, true, true}
+	if !reflect.DeepEqual(existing.NotificationSettings, allUpdates) {
+		t.Fatalf("initial package settings = %+v, want %+v", existing.NotificationSettings, allUpdates)
+	}
+
+	defaults := NotificationSettings{
+		NotificationsEnabled: true,
+		NotifyInTransit:      false,
+		NotifyOutForDelivery: true,
+		NotifyDelivered:      true,
+		NotifyExceptions:     false,
+	}
+	updatedDefaults, err := dataStore.SetNotificationDefaults(t.Context(), defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(updatedDefaults, defaults) {
+		t.Fatalf("updated defaults = %+v, want %+v", updatedDefaults, defaults)
+	}
+	created, err := dataStore.CreatePackage(t.Context(), NewPackage{
+		Description: "New package", TrackingNumber: "9400110898825022579493", Status: "PreTransit",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(created.NotificationSettings, defaults) {
+		t.Fatalf("new package settings = %+v, want %+v", created.NotificationSettings, defaults)
+	}
+	packages, err := dataStore.ListPackages(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pkg := range packages {
+		if pkg.ID == existing.ID && !reflect.DeepEqual(pkg.NotificationSettings, allUpdates) {
+			t.Fatalf("defaults changed existing package settings to %+v", pkg.NotificationSettings)
+		}
+	}
+
+	override := NotificationSettings{NotificationsEnabled: true, NotifyExceptions: true}
+	customized, err := dataStore.SetPackageNotificationSettings(t.Context(), created.ID, override)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(customized.NotificationSettings, override) {
+		t.Fatalf("package override = %+v, want %+v", customized.NotificationSettings, override)
+	}
+	if customized.Allows("InTransit") || customized.Allows("Delivered") || !customized.Allows("DeliveryFailure") {
+		t.Fatalf("package override did not filter notification categories: %+v", customized.NotificationSettings)
 	}
 }
 
@@ -262,7 +327,7 @@ INSERT INTO packages (
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(packages) != 1 || packages[0].Carrier != "" || packages[0].TrackingNumber != "9400110898825022579493" {
+	if len(packages) != 1 || packages[0].Carrier != "" || packages[0].TrackingNumber != "9400110898825022579493" || !packages[0].NotifyInTransit || !packages[0].NotifyOutForDelivery || !packages[0].NotifyDelivered || !packages[0].NotifyExceptions {
 		t.Fatalf("migrated packages = %+v", packages)
 	}
 }

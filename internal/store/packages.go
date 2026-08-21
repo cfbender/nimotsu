@@ -86,22 +86,21 @@ func (s *Store) RecordTrackingEvents(ctx context.Context, packageID string, upda
 func (s *Store) CreatePackage(ctx context.Context, input NewPackage) (Package, error) {
 	now := time.Now().UTC().Truncate(time.Second)
 	pkg := Package{
-		ID:                   newID(),
-		Description:          input.Description,
-		TrackingNumber:       input.TrackingNumber,
-		Carrier:              input.Carrier,
-		TrackingProvider:     input.TrackingProvider,
-		TrackingProviderID:   input.TrackingProviderID,
-		Status:               input.Status,
-		SubStatus:            input.SubStatus,
-		LatestMessage:        input.LatestMessage,
-		LatestLocation:       input.LatestLocation,
-		EstimatedDeliveryAt:  input.EstimatedDeliveryAt,
-		LastEventAt:          input.LastEventAt,
-		TrackingError:        input.TrackingError,
-		NotificationsEnabled: true,
-		CreatedAt:            now,
-		UpdatedAt:            now,
+		ID:                  newID(),
+		Description:         input.Description,
+		TrackingNumber:      input.TrackingNumber,
+		Carrier:             input.Carrier,
+		TrackingProvider:    input.TrackingProvider,
+		TrackingProviderID:  input.TrackingProviderID,
+		Status:              input.Status,
+		SubStatus:           input.SubStatus,
+		LatestMessage:       input.LatestMessage,
+		LatestLocation:      input.LatestLocation,
+		EstimatedDeliveryAt: input.EstimatedDeliveryAt,
+		LastEventAt:         input.LastEventAt,
+		TrackingError:       input.TrackingError,
+		CreatedAt:           now,
+		UpdatedAt:           now,
 	}
 
 	var estimatedDeliveryUnix, lastEventUnix any
@@ -116,12 +115,19 @@ func (s *Store) CreatePackage(ctx context.Context, input NewPackage) (Package, e
 		return Package{}, fmt.Errorf("begin package creation: %w", err)
 	}
 	defer tx.Rollback()
+	pkg.NotificationSettings, err = scanNotificationSettings(tx.QueryRowContext(ctx, `
+SELECT notifications_enabled, notify_in_transit, notify_out_for_delivery, notify_delivered, notify_exceptions
+FROM notification_defaults WHERE id = 1`))
+	if err != nil {
+		return Package{}, fmt.Errorf("read notification defaults: %w", err)
+	}
 
 	result, err := tx.ExecContext(ctx, `
 INSERT INTO packages (
     id, description, tracking_number, carrier, tracking_provider, tracking_provider_id, status, sub_status,
-    latest_message, latest_location, estimated_delivery_at, last_event_at, tracking_error, notifications_enabled, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+    latest_message, latest_location, estimated_delivery_at, last_event_at, tracking_error, notifications_enabled,
+    notify_in_transit, notify_out_for_delivery, notify_delivered, notify_exceptions, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(tracking_number) DO UPDATE SET
     description = excluded.description,
     carrier = excluded.carrier,
@@ -134,12 +140,18 @@ ON CONFLICT(tracking_number) DO UPDATE SET
     estimated_delivery_at = excluded.estimated_delivery_at,
     last_event_at = excluded.last_event_at,
     tracking_error = excluded.tracking_error,
-    notifications_enabled = 1,
+    notifications_enabled = excluded.notifications_enabled,
+    notify_in_transit = excluded.notify_in_transit,
+    notify_out_for_delivery = excluded.notify_out_for_delivery,
+    notify_delivered = excluded.notify_delivered,
+    notify_exceptions = excluded.notify_exceptions,
     archived = 0,
     updated_at = excluded.updated_at
 WHERE packages.archived = 1`,
 		pkg.ID, pkg.Description, pkg.TrackingNumber, pkg.Carrier, pkg.TrackingProvider, pkg.TrackingProviderID, pkg.Status, pkg.SubStatus,
-		pkg.LatestMessage, pkg.LatestLocation, estimatedDeliveryUnix, lastEventUnix, pkg.TrackingError, now.Unix(), now.Unix(),
+		pkg.LatestMessage, pkg.LatestLocation, estimatedDeliveryUnix, lastEventUnix, pkg.TrackingError,
+		pkg.NotificationsEnabled, pkg.NotifyInTransit, pkg.NotifyOutForDelivery, pkg.NotifyDelivered, pkg.NotifyExceptions,
+		now.Unix(), now.Unix(),
 	)
 	if err != nil {
 		return Package{}, fmt.Errorf("create package: %w", err)

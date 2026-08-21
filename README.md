@@ -6,7 +6,7 @@ Nimotsu is intentionally single-tenant. It has no users, accounts, or tenancy mo
 
 The repository currently contains the first end-to-end slice:
 
-- mobile-first package list, manual add, carrier auto-detection, archive, and per-package notification toggle
+- mobile-first package list, manual add, carrier auto-detection, archive, and per-package notification categories with defaults for new packages
 - provider-neutral tracking integration with Shippo and authenticated `track_updated` webhooks
 - Capacitor 8 Android shell and device push-token registration
 - FCM HTTP v1 delivery from the Go server
