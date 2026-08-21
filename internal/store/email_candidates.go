@@ -27,9 +27,12 @@ func (s *Store) SaveEmailCandidates(ctx context.Context, candidates []EmailCandi
 		_, err := tx.ExecContext(ctx, `
 INSERT OR IGNORE INTO email_candidates (
     id, message_id, tracking_number, description, sender, message_at, status, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+) SELECT ?, ?, ?, ?, ?, ?, 'pending', ?, ?
+WHERE NOT EXISTS (
+    SELECT 1 FROM packages WHERE tracking_number = ? AND archived = 0
+)`,
 			candidate.ID, candidate.MessageID, candidate.TrackingNumber, candidate.Description,
-			candidate.Sender, candidate.MessageAt.UTC().Unix(), candidate.CreatedAt.UTC().Unix(), now.Unix(),
+			candidate.Sender, candidate.MessageAt.UTC().Unix(), candidate.CreatedAt.UTC().Unix(), now.Unix(), candidate.TrackingNumber,
 		)
 		if err != nil {
 			return fmt.Errorf("save email candidate: %w", err)

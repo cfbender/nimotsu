@@ -117,6 +117,53 @@ func TestPackageLifecycle(t *testing.T) {
 	}
 }
 
+func TestSaveEmailCandidatesSkipsTrackedPackages(t *testing.T) {
+	dataStore, err := Open(filepath.Join(t.TempDir(), "nimotsu.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dataStore.Close()
+
+	pkg, err := dataStore.CreatePackage(t.Context(), NewPackage{
+		Description:    "Headphones",
+		TrackingNumber: "1Z999AA10123456784",
+		Status:         "InTransit",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	messageAt := time.Date(2026, time.August, 21, 12, 0, 0, 0, time.UTC)
+	if err := dataStore.SaveEmailCandidates(t.Context(), []EmailCandidate{
+		{MessageID: "delivered-email", TrackingNumber: pkg.TrackingNumber, Description: "Delivered", MessageAt: messageAt},
+		{MessageID: "shipping-email", TrackingNumber: "9400111899223856928499", Description: "Shipped", MessageAt: messageAt},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := dataStore.ListEmailCandidates(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 1 || candidates[0].TrackingNumber != "9400111899223856928499" {
+		t.Fatalf("candidates = %+v, want only the untracked package", candidates)
+	}
+
+	if err := dataStore.ArchivePackage(t.Context(), pkg.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := dataStore.SaveEmailCandidates(t.Context(), []EmailCandidate{{
+		MessageID: "replacement-email", TrackingNumber: pkg.TrackingNumber, Description: "Replacement shipped", MessageAt: messageAt,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	candidates, err = dataStore.ListEmailCandidates(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 2 {
+		t.Fatalf("candidates after archive = %+v, want archived tracking number to be eligible", candidates)
+	}
+}
+
 func TestTrackingEventsPersistRegistrationHistory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nimotsu.db")
 	dataStore, err := Open(path)
