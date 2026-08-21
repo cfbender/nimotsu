@@ -46,6 +46,7 @@ func New(dataStore *store.Store, trackerClient tracking.Provider, gmailService *
 	mux.HandleFunc("GET /api/health", server.health)
 	mux.Handle("GET /api/packages", server.authorize(http.HandlerFunc(server.listPackages)))
 	mux.Handle("POST /api/packages", server.authorize(http.HandlerFunc(server.createPackage)))
+	mux.Handle("POST /api/packages/refresh", server.authorize(http.HandlerFunc(server.refreshTracking)))
 	mux.Handle("GET /api/packages/{id}/events", server.authorize(http.HandlerFunc(server.listTrackingEvents)))
 	mux.Handle("PATCH /api/packages/{id}", server.authorize(http.HandlerFunc(server.updatePackage)))
 	mux.Handle("DELETE /api/packages/{id}", server.authorize(http.HandlerFunc(server.archivePackage)))
@@ -76,6 +77,99 @@ func (s *Server) listPackages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, packages)
+}
+
+func (s *Server) refreshTracking(w http.ResponseWriter, r *http.Request) {
+	if s.tracker == nil {
+		writeError(w, http.StatusServiceUnavailable, "Shippo is not configured on this server")
+		return
+	}
+	packages, err := s.store.ListPackages(r.Context())
+	if err != nil {
+		s.internalError(w, "list packages for tracking refresh", err)
+		return
+	}
+	refreshed := 0
+	failed := 0
+	for _, pkg := range packages {
+		if pkg.Status == "Delivered" {
+			continue
+		}
+		registration := tracking.Registration{}
+		if pkg.TrackingProvider == s.tracker.Name() {
+			registration, err = s.tracker.Lookup(r.Context(), pkg.TrackingNumber, pkg.Carrier)
+		} else {
+			registration, err = s.tracker.Register(r.Context(), pkg.TrackingNumber, pkg.Carrier)
+		}
+		if err != nil {
+			failed++
+			s.logger.Warn("manual tracking refresh failed", "package_id", pkg.ID, "error", err)
+			continue
+		}
+		updated, changed, updateErr := s.saveTrackingRegistration(r.Context(), pkg, registration)
+		if updateErr != nil {
+			failed++
+			s.logger.Error("save manual tracking refresh", "package_id", pkg.ID, "error", updateErr)
+			continue
+		}
+		refreshed++
+		if changed && updated.NotificationsEnabled && s.onTrackingUpdate != nil {
+			go s.onTrackingUpdate(updated)
+		}
+	}
+	packages, err = s.store.ListPackages(r.Context())
+	if err != nil {
+		s.internalError(w, "list refreshed packages", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Packages  []store.Package `json:"packages"`
+		Refreshed int             `json:"refreshed"`
+		Failed    int             `json:"failed"`
+	}{Packages: packages, Refreshed: refreshed, Failed: failed})
+}
+
+func (s *Server) saveTrackingRegistration(ctx context.Context, pkg store.Package, registration tracking.Registration) (store.Package, bool, error) {
+	status := registration.Status
+	if status == "" {
+		status = "Registered"
+	}
+	carrier := pkg.Carrier
+	if registration.Carrier != "" {
+		carrier = registration.Carrier
+	}
+	providerName := ""
+	providerID := ""
+	if pkg.TrackingProvider != s.tracker.Name() || pkg.TrackingProviderID == "" {
+		providerName = s.tracker.Name()
+		providerID = registration.ProviderID
+	}
+	updated, changed, err := s.store.UpdateTracking(ctx, pkg.TrackingNumber, carrier, store.TrackingUpdate{
+		Provider:            providerName,
+		ProviderID:          providerID,
+		Status:              status,
+		SubStatus:           registration.SubStatus,
+		LatestMessage:       registration.LatestMessage,
+		Location:            registration.Location,
+		EstimatedDeliveryAt: registration.EstimatedDeliveryAt,
+		LastEventAt:         registration.LastEventAt,
+	})
+	if err != nil {
+		return store.Package{}, false, err
+	}
+	events := make([]store.TrackingUpdate, 0, len(registration.History)+1)
+	for _, event := range registration.History {
+		events = append(events, store.TrackingUpdate{
+			Status: event.Status, SubStatus: event.SubStatus, LatestMessage: event.LatestMessage, Location: event.Location, LastEventAt: event.LastEventAt,
+		})
+	}
+	events = append(events, store.TrackingUpdate{
+		Status: status, SubStatus: registration.SubStatus, LatestMessage: registration.LatestMessage, Location: registration.Location, LastEventAt: registration.LastEventAt,
+	})
+	if err := s.store.RecordTrackingEvents(ctx, updated.ID, events); err != nil {
+		return store.Package{}, false, err
+	}
+	return updated, changed, nil
 }
 
 func (s *Server) listTrackingEvents(w http.ResponseWriter, r *http.Request) {

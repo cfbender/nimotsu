@@ -37,6 +37,7 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  overscroll-behavior-y: none;
   color: var(--ink);
   background: radial-gradient(circle at 90% 0, var(--page-tint), transparent 28rem), var(--page);
 }
@@ -45,12 +46,25 @@ button { color: inherit; -webkit-tap-highlight-color: transparent; }
 svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 button:focus-visible, input:focus-visible { outline: 3px solid var(--blue-ring); outline-offset: 2px; }
 
-.app-shell { width: min(100%, 760px); min-height: 100vh; margin: 0 auto; padding: max(24px, env(safe-area-inset-top)) 20px max(100px, env(safe-area-inset-bottom)); }
+.app-shell { position: relative; width: min(100%, 760px); min-height: 100vh; margin: 0 auto; padding: max(24px, env(safe-area-inset-top)) 20px max(100px, env(safe-area-inset-bottom)); }
+.topbar, .app-shell > main { transform: translateY(var(--pull-distance, 0)); transition: transform .2s ease-out; }
+.app-shell.pulling .topbar, .app-shell.pulling > main { transition: none; }
 .topbar { display: flex; align-items: center; justify-content: space-between; padding: 10px 2px 30px; }
+.topbar-actions { display: flex; align-items: center; gap: 9px; }
 .eyebrow { margin: 0 0 2px; color: var(--muted); font-size: .73rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
 h1, h2, h3, p { margin-top: 0; }
 h1 { margin-bottom: 0; font-family: ui-rounded, "Arial Rounded MT Bold", system-ui, sans-serif; font-size: clamp(2rem, 8vw, 2.7rem); line-height: 1; letter-spacing: -.06em; }
 .icon-button { display: grid; width: 44px; height: 44px; padding: 0; place-items: center; border: 1px solid var(--line); border-radius: 50%; background: var(--paper); box-shadow: var(--shadow); cursor: pointer; }
+.refresh-button { display: none; min-height: 44px; align-items: center; gap: 7px; padding: 0 15px; color: var(--green); border: 1px solid var(--green-border); border-radius: 14px; background: var(--green-soft); font-size: .78rem; font-weight: 700; cursor: pointer; }
+.refresh-button svg { width: 18px; height: 18px; }
+.refresh-button:disabled { opacity: .55; cursor: wait; }
+.refresh-button.refreshing svg, .pull-indicator.refreshing svg { animation: spin .8s linear infinite; }
+.pull-indicator { position: absolute; top: max(7px, env(safe-area-inset-top)); left: 50%; display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: .7rem; font-weight: 700; opacity: 0; transform: translate(-50%, calc(var(--pull-distance, 0) - 36px)); transition: opacity .15s ease, transform .2s ease-out; pointer-events: none; white-space: nowrap; }
+.app-shell.pulling .pull-indicator { opacity: 1; }
+.pull-indicator.refreshing { opacity: 1; transform: translate(-50%, 0); }
+.pull-indicator svg { width: 17px; height: 17px; }
+.pull-indicator.pull-ready { color: var(--green); }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 .empty-state { min-height: 58vh; display: flex; align-items: center; flex-direction: column; justify-content: center; text-align: center; }
 .empty-illustration { display: grid; width: 112px; height: 112px; margin-bottom: 26px; place-items: center; color: var(--green); border-radius: 34px; background: var(--green-soft); transform: rotate(-3deg); }
@@ -227,6 +241,8 @@ input::placeholder { color: var(--subtle); }
 
 @media (min-width: 640px) {
   .app-shell { padding-right: 28px; padding-left: 28px; }
+  .refresh-button { display: flex; }
+  .pull-indicator { display: none; }
   .package-card-main { padding: 23px; }
   .sheet { margin-bottom: 24px; border-radius: 26px; }
   .sheet-backdrop { align-items: center; padding: 30px; }

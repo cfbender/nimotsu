@@ -28,6 +28,12 @@ export interface TrackingEvent {
   occurred_at: string
 }
 
+export interface TrackingRefreshResult {
+  packages: TrackedPackage[]
+  refreshed: number
+  failed: number
+}
+
 export interface ConnectionSettings {
   serverURL: string
   apiToken: string
@@ -74,6 +80,10 @@ export async function listPackages(): Promise<TrackedPackage[]> {
 
 export async function listTrackingEvents(id: string): Promise<TrackingEvent[]> {
   return request<TrackingEvent[]>(`/api/packages/${id}/events`)
+}
+
+export async function refreshTracking(): Promise<TrackingRefreshResult> {
+  return request<TrackingRefreshResult>('/api/packages/refresh', { method: 'POST' })
 }
 
 export async function detectCarrier(trackingNumber: string): Promise<string> {

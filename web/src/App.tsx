@@ -14,6 +14,7 @@ import {
   listEmailCandidates,
   listPackages,
   listTrackingEvents,
+  refreshTracking,
   renamePackage,
   saveConnectionSettings,
   sendTestNotification,
@@ -34,6 +35,8 @@ export default function App() {
   const [packages, setPackages] = useState<TrackedPackage[]>([])
   const [candidates, setCandidates] = useState<EmailCandidate[]>([])
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [pullDistance, setPullDistance] = useState(0)
   const [error, setError] = useState('')
   const [sheet, setSheet] = useState<Sheet>(
     (isNative() && !getConnectionSettings().serverURL) || new URLSearchParams(window.location.search).has('gmail') ? 'settings' : null,
@@ -42,6 +45,7 @@ export default function App() {
   const [archiveTarget, setArchiveTarget] = useState<TrackedPackage | null>(null)
   const [archiving, setArchiving] = useState(false)
   const [connectionVersion, setConnectionVersion] = useState(0)
+  const pullRef = useRef<{ startX: number; startY: number; distance: number } | null>(null)
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -64,6 +68,57 @@ export default function App() {
     }
     if (!isNative() || getConnectionSettings().serverURL) void loadData()
   }, [connectionVersion, loadData])
+
+  const updateTracking = useCallback(async () => {
+    if (refreshing) return
+    setRefreshing(true)
+    setError('')
+    try {
+      const result = await refreshTracking()
+      setPackages(result.packages)
+      setSelectedPackage((current) => current ? result.packages.find((pkg) => pkg.id === current.id) ?? null : null)
+      if (result.failed > 0) {
+        setError(`${result.failed} ${result.failed === 1 ? 'package' : 'packages'} could not be refreshed`)
+      }
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Could not refresh tracking')
+    } finally {
+      setRefreshing(false)
+    }
+  }, [refreshing])
+
+  function startPull(event: React.TouchEvent<HTMLDivElement>) {
+    if (!window.matchMedia('(max-width: 639px)').matches || window.scrollY > 0 || event.touches.length !== 1 || loading || refreshing || packages.length === 0 || sheet || selectedPackage || archiveTarget) return
+    pullRef.current = { startX: event.touches[0].clientX, startY: event.touches[0].clientY, distance: 0 }
+  }
+
+  function movePull(event: React.TouchEvent<HTMLDivElement>) {
+    const pull = pullRef.current
+    if (!pull || event.touches.length !== 1) return
+    const horizontal = Math.abs(event.touches[0].clientX - pull.startX)
+    const vertical = event.touches[0].clientY - pull.startY
+    if (horizontal > Math.max(12, vertical)) {
+      pullRef.current = null
+      setPullDistance(0)
+      return
+    }
+    if (vertical <= 0 || window.scrollY > 0) {
+      pull.distance = 0
+      setPullDistance(0)
+      return
+    }
+    event.preventDefault()
+    pull.distance = Math.min(76, vertical * 0.5)
+    setPullDistance(pull.distance)
+  }
+
+  function finishPull(cancelled = false) {
+    const pull = pullRef.current
+    if (!pull) return
+    pullRef.current = null
+    if (!cancelled && pull.distance >= 56) void updateTracking()
+    setPullDistance(0)
+  }
 
   async function toggleNotifications(pkg: TrackedPackage) {
     try {
@@ -115,15 +170,32 @@ export default function App() {
   }
 
   return (
-    <div className="app-shell">
+    <div
+      className={`app-shell${pullDistance > 0 ? ' pulling' : ''}`}
+      style={{ '--pull-distance': `${pullDistance}px` } as React.CSSProperties}
+      onTouchStart={startPull}
+      onTouchMove={movePull}
+      onTouchEnd={() => finishPull()}
+      onTouchCancel={() => finishPull(true)}
+    >
+      <div className={`pull-indicator${pullDistance >= 56 ? ' pull-ready' : ''}${refreshing ? ' refreshing' : ''}`} role="status" aria-live="polite">
+        <RefreshIcon />
+        <span>{refreshing ? 'Refreshing tracking' : pullDistance >= 56 ? 'Release to refresh' : 'Pull to refresh'}</span>
+      </div>
       <header className="topbar">
         <div>
           <p className="eyebrow">Your deliveries</p>
           <h1>Nimotsu</h1>
         </div>
-        <button className="icon-button" type="button" aria-label="Open settings" onClick={() => setSheet('settings')}>
-          <SettingsIcon />
-        </button>
+        <div className="topbar-actions">
+          <button className={`refresh-button${refreshing ? ' refreshing' : ''}`} type="button" disabled={loading || refreshing || packages.length === 0} onClick={() => void updateTracking()}>
+            <RefreshIcon />
+            {refreshing ? 'Refreshing…' : 'Refresh'}
+          </button>
+          <button className="icon-button" type="button" aria-label="Open settings" onClick={() => setSheet('settings')}>
+            <SettingsIcon />
+          </button>
+        </div>
       </header>
 
       <main>
@@ -901,6 +973,10 @@ function SettingsIcon() {
 
 function PlusIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+}
+
+function RefreshIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5" /><path d="M6.1 8.5A7 7 0 0 1 18.8 7M17.9 15.5A7 7 0 0 1 5.2 17" /></svg>
 }
 
 function ChevronIcon() {

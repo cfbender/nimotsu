@@ -25,6 +25,7 @@ type fakeProvider struct {
 	update          tracking.Update
 	webhookErr      error
 	registerCalls   []trackingRequest
+	lookupCalls     []trackingRequest
 }
 
 type trackingRequest struct {
@@ -50,7 +51,10 @@ func (f *fakeProvider) Register(_ context.Context, number, carrier string) (trac
 	return f.registration, f.registrationErr
 }
 
-func (f *fakeProvider) Lookup(context.Context, string, string) (tracking.Registration, error) {
+func (f *fakeProvider) Lookup(_ context.Context, number, carrier string) (tracking.Registration, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lookupCalls = append(f.lookupCalls, trackingRequest{number: number, carrier: carrier})
 	return f.registration, f.registrationErr
 }
 
@@ -62,6 +66,12 @@ func (f *fakeProvider) callCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.registerCalls)
+}
+
+func (f *fakeProvider) lookupCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.lookupCalls)
 }
 
 func TestCreatePackageWithoutConfiguredTracker(t *testing.T) {
@@ -238,6 +248,114 @@ func TestPackageTrackingEventsAndCarrierDetection(t *testing.T) {
 	handler.ServeHTTP(missingResponse, missingRequest)
 	if missingResponse.Code != http.StatusNotFound {
 		t.Fatalf("missing events status = %d, body = %s", missingResponse.Code, missingResponse.Body.String())
+	}
+}
+
+func TestRefreshTrackingLooksUpPackagesAndSavesHistory(t *testing.T) {
+	dataStore := openTestStore(t)
+	inTransitAt := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	provider := &fakeProvider{registration: tracking.Registration{
+		ProviderID: "ups:1Z999AA10123456784",
+		Update: tracking.Update{
+			Carrier: "UPS", Status: "InTransit", LatestMessage: "Out for delivery", LastEventAt: &inTransitAt,
+		},
+	}}
+	handler := New(dataStore, provider, nil, "", nil, nil, testLogger())
+	created := postJSON(handler, "/api/packages", `{"description":"Headphones","tracking_number":"1Z999AA10123456784"}`)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, body = %s", created.Code, created.Body.String())
+	}
+
+	deliveredAt := inTransitAt.Add(2 * time.Hour)
+	provider.mu.Lock()
+	provider.registration = tracking.Registration{
+		ProviderID: "ups:1Z999AA10123456784",
+		Update: tracking.Update{
+			Carrier: "UPS", Status: "Delivered", LatestMessage: "Delivered", Location: "Front door", LastEventAt: &deliveredAt,
+		},
+		History: []tracking.Update{{
+			Status: "InTransit", LatestMessage: "Out for delivery", LastEventAt: &inTransitAt,
+		}},
+	}
+	provider.mu.Unlock()
+
+	response := postJSON(handler, "/api/packages/refresh", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("refresh status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var result struct {
+		Packages  []store.Package `json:"packages"`
+		Refreshed int             `json:"refreshed"`
+		Failed    int             `json:"failed"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Refreshed != 1 || result.Failed != 0 || len(result.Packages) != 1 || result.Packages[0].Status != "Delivered" || result.Packages[0].LatestLocation != "Front door" {
+		t.Fatalf("refresh result = %+v", result)
+	}
+	if provider.lookupCount() != 1 {
+		t.Fatalf("lookup calls = %d", provider.lookupCount())
+	}
+	provider.mu.Lock()
+	if provider.lookupCalls[0].number != "1Z999AA10123456784" || provider.lookupCalls[0].carrier != "UPS" {
+		t.Fatalf("lookup request = %+v", provider.lookupCalls[0])
+	}
+	provider.mu.Unlock()
+	events, err := dataStore.ListTrackingEvents(t.Context(), result.Packages[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[0].Status != "Delivered" || events[0].Location != "Front door" || events[1].Status != "InTransit" {
+		t.Fatalf("events = %+v", events)
+	}
+}
+
+func TestRefreshTrackingDoesNotRegressANewerStoredUpdate(t *testing.T) {
+	dataStore := openTestStore(t)
+	newerAt := time.Date(2026, 8, 20, 14, 0, 0, 0, time.UTC)
+	provider := &fakeProvider{registration: tracking.Registration{
+		ProviderID: "ups:1Z999AA10123456784",
+		Update: tracking.Update{
+			Carrier: "UPS", Status: "InTransit", LatestMessage: "Out for delivery", LastEventAt: &newerAt,
+		},
+	}}
+	handler := New(dataStore, provider, nil, "", nil, nil, testLogger())
+	created := postJSON(handler, "/api/packages", `{"description":"Headphones","tracking_number":"1Z999AA10123456784"}`)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, body = %s", created.Code, created.Body.String())
+	}
+
+	olderAt := newerAt.Add(-2 * time.Hour)
+	provider.mu.Lock()
+	provider.registration = tracking.Registration{
+		ProviderID: "ups:1Z999AA10123456784",
+		Update: tracking.Update{
+			Carrier: "UPS", Status: "PreTransit", LatestMessage: "Label created", LastEventAt: &olderAt,
+		},
+	}
+	provider.mu.Unlock()
+
+	response := postJSON(handler, "/api/packages/refresh", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("refresh status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var result struct {
+		Packages []store.Package `json:"packages"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Packages) != 1 || result.Packages[0].Status != "InTransit" || result.Packages[0].LatestMessage != "Out for delivery" || result.Packages[0].LastEventAt == nil || !result.Packages[0].LastEventAt.Equal(newerAt) {
+		t.Fatalf("refresh regressed package = %+v", result.Packages)
+	}
+}
+
+func TestRefreshTrackingRequiresConfiguredProvider(t *testing.T) {
+	handler := New(openTestStore(t), nil, nil, "", nil, nil, testLogger())
+	response := postJSON(handler, "/api/packages/refresh", "")
+	if response.Code != http.StatusServiceUnavailable || !bytes.Contains(response.Body.Bytes(), []byte("Shippo is not configured")) {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
 }
 
