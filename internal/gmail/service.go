@@ -2,8 +2,6 @@ package gmail
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
@@ -13,9 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/mail"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -372,132 +368,4 @@ func userFacingSyncError(err error) string {
 		return "Gmail access expired; reconnect the account"
 	}
 	return "Could not scan Gmail; try again later"
-}
-
-type messageSummary struct {
-	ID string `json:"id"`
-}
-
-type gmailMessage struct {
-	ID           string      `json:"id"`
-	Snippet      string      `json:"snippet"`
-	InternalDate string      `json:"internalDate"`
-	Payload      messagePart `json:"payload"`
-}
-
-type messagePart struct {
-	MimeType string          `json:"mimeType"`
-	Headers  []messageHeader `json:"headers"`
-	Body     messageBody     `json:"body"`
-	Parts    []messagePart   `json:"parts"`
-}
-
-type messageHeader struct {
-	Name  string `json:"name"`
-	Value string `json:"value"`
-}
-
-type messageBody struct {
-	Data string `json:"data"`
-}
-
-func (m gmailMessage) header(name string) string {
-	for _, header := range m.Payload.Headers {
-		if strings.EqualFold(header.Name, name) {
-			return strings.TrimSpace(header.Value)
-		}
-	}
-	return ""
-}
-
-func (m gmailMessage) searchableText() string {
-	parts := []string{m.header("Subject"), m.Snippet}
-	m.Payload.appendText(&parts)
-	return strings.Join(parts, "\n")
-}
-
-func (m gmailMessage) description() string {
-	description := strings.TrimSpace(m.header("Subject"))
-	if description == "" {
-		description = "Package from " + m.sender()
-	}
-	if len(description) > 160 {
-		description = description[:160]
-	}
-	return description
-}
-
-func (m gmailMessage) sender() string {
-	raw := m.header("From")
-	address, err := mail.ParseAddress(raw)
-	if err == nil {
-		if strings.TrimSpace(address.Name) != "" {
-			return address.Name
-		}
-		return address.Address
-	}
-	if len(raw) > 160 {
-		return raw[:160]
-	}
-	return raw
-}
-
-func (m gmailMessage) receivedAt() time.Time {
-	milliseconds, err := strconv.ParseInt(m.InternalDate, 10, 64)
-	if err != nil {
-		return time.Now().UTC().Truncate(time.Second)
-	}
-	return time.UnixMilli(milliseconds).UTC()
-}
-
-func (p messagePart) appendText(destination *[]string) {
-	if (p.MimeType == "text/plain" || p.MimeType == "text/html" || p.MimeType == "") && p.Body.Data != "" {
-		decoded, err := base64.RawURLEncoding.DecodeString(p.Body.Data)
-		if err == nil && len(decoded) <= 1<<20 {
-			*destination = append(*destination, string(decoded))
-		}
-	}
-	for _, part := range p.Parts {
-		part.appendText(destination)
-	}
-}
-
-type tokenCipher struct {
-	aead cipher.AEAD
-}
-
-func newTokenCipher(encodedKey string) (tokenCipher, error) {
-	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(encodedKey))
-	if err != nil || len(key) != 32 {
-		return tokenCipher{}, errors.New("NIMOTSU_ENCRYPTION_KEY must be a base64-encoded 32-byte key")
-	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return tokenCipher{}, fmt.Errorf("create token cipher: %w", err)
-	}
-	aead, err := cipher.NewGCM(block)
-	if err != nil {
-		return tokenCipher{}, fmt.Errorf("create token cipher: %w", err)
-	}
-	return tokenCipher{aead: aead}, nil
-}
-
-func (c tokenCipher) encrypt(plain []byte) ([]byte, error) {
-	nonce := make([]byte, c.aead.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, fmt.Errorf("generate token nonce: %w", err)
-	}
-	return c.aead.Seal(nonce, nonce, plain, []byte("nimotsu:gmail-token:v1")), nil
-}
-
-func (c tokenCipher) decrypt(encrypted []byte) ([]byte, error) {
-	nonceSize := c.aead.NonceSize()
-	if len(encrypted) <= nonceSize {
-		return nil, errors.New("stored Gmail token is invalid")
-	}
-	plain, err := c.aead.Open(nil, encrypted[:nonceSize], encrypted[nonceSize:], []byte("nimotsu:gmail-token:v1"))
-	if err != nil {
-		return nil, errors.New("could not decrypt Gmail token; verify NIMOTSU_ENCRYPTION_KEY")
-	}
-	return plain, nil
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -39,6 +40,21 @@ func NewSender(ctx context.Context, credentialsPath string) (*Sender, error) {
 		return nil, fmt.Errorf("configure Firebase credentials: %w", err)
 	}
 	return &Sender{projectID: serviceAccount.ProjectID, httpClient: config.Client(ctx)}, nil
+}
+
+// SendAll sends the notification to every device token and reports how many
+// sends succeeded alongside the joined errors of the failed ones.
+func (s *Sender) SendAll(ctx context.Context, tokens []string, title, body, packageID string) (int, error) {
+	sent := 0
+	var sendErrors []error
+	for _, token := range tokens {
+		if err := s.Send(ctx, token, title, body, packageID); err != nil {
+			sendErrors = append(sendErrors, err)
+			continue
+		}
+		sent++
+	}
+	return sent, errors.Join(sendErrors...)
 }
 
 func (s *Sender) Send(ctx context.Context, token, title, body, packageID string) error {
