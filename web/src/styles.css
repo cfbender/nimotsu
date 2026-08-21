@@ -225,10 +225,16 @@ input::placeholder { color: var(--subtle); }
 .detail-actions .secondary-button { display: flex; min-height: 44px; align-items: center; justify-content: center; gap: 7px; }
 .detail-actions .danger-action { padding: 0 14px; border: 1px solid var(--red-border); border-radius: 12px; background: var(--red-soft); }
 .detail-actions svg { width: 17px; height: 17px; }
-.package-notification-section { margin-top: 24px; }
-.package-notification-section > div:first-child { margin-bottom: 11px; }
-.package-notification-section h3 { margin-bottom: 4px; font-size: .9rem; }
-.package-notification-section p { margin-bottom: 0; color: var(--muted); font-size: .76rem; line-height: 1.45; }
+.package-notification-section { overflow: hidden; margin-top: 20px; border: 1px solid var(--line); border-radius: 15px; background: var(--paper); }
+.package-notification-section summary { display: flex; min-height: 66px; align-items: center; gap: 14px; padding: 11px 14px; list-style: none; cursor: pointer; }
+.package-notification-section summary::-webkit-details-marker { display: none; }
+.package-notification-section summary > span { display: grid; min-width: 0; flex: 1; gap: 3px; }
+.package-notification-section summary strong { font-size: .9rem; line-height: 1.3; }
+.package-notification-section summary small { color: var(--muted); font-size: .72rem; line-height: 1.4; }
+.package-notification-section summary .chevron-icon { width: 18px; height: 18px; flex: 0 0 auto; color: var(--muted); transition: transform .18s ease; }
+.package-notification-section[open] summary { border-bottom: 1px solid var(--line); background: var(--raised); }
+.package-notification-section[open] summary .chevron-icon { transform: rotate(90deg); }
+.package-notification-body { padding: 12px; }
 .package-notification-section .form-error { margin-top: 9px; color: var(--red); }
 .detail-actions.archive-only { display: flex; justify-content: flex-end; margin-top: 10px; }
 .history-section { margin-top: 28px; }

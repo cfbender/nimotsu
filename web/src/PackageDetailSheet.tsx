@@ -5,7 +5,7 @@ import { isNative, listTrackingEvents, type NotificationSettings, type TrackingE
 import { formatCarrier, formatEstimatedDelivery, formatEventDate, formatStatus, getCarrierTrackingURL } from './format'
 import { NotificationSettingsControls } from './NotificationSettingsControls'
 import { Sheet } from './Sheet'
-import { CheckIcon, ClockIcon, CopyIcon, EditIcon, ExternalLinkIcon, LocationIcon, PackageIcon } from './icons'
+import { CheckIcon, ChevronIcon, ClockIcon, CopyIcon, EditIcon, ExternalLinkIcon, LocationIcon, PackageIcon } from './icons'
 
 export function PackageDetailSheet({
   pkg,
@@ -159,18 +159,23 @@ export function PackageDetailSheet({
         </div>
       </dl>
 
-      <section className="package-notification-section" aria-labelledby="package-notification-heading">
-        <div>
-          <h3 id="package-notification-heading">Notifications</h3>
-          <p>Choose which updates you want for this package.</p>
+      <details className="package-notification-section" aria-labelledby="package-notification-heading">
+        <summary>
+          <span>
+            <strong id="package-notification-heading">Notifications</strong>
+            <small>Choose which updates you want for this package.</small>
+          </span>
+          <ChevronIcon />
+        </summary>
+        <div className="package-notification-body">
+          <NotificationSettingsControls
+            settings={pkg}
+            disabled={savingNotifications}
+            onChange={(settings) => void updateNotifications(settings)}
+          />
+          {notificationError && <p className="form-error" role="alert">{notificationError}</p>}
         </div>
-        <NotificationSettingsControls
-          settings={pkg}
-          disabled={savingNotifications}
-          onChange={(settings) => void updateNotifications(settings)}
-        />
-        {notificationError && <p className="form-error" role="alert">{notificationError}</p>}
-      </section>
+      </details>
 
       <div className="detail-actions archive-only">
         <button className="text-button danger-action" type="button" onClick={onArchive}>Archive package</button>
