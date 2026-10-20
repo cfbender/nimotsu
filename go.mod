@@ -1,6 +1,6 @@
 module github.com/cfbender/nimotsu
 
-go 1.25.0
+go 1.26.10
 
 require (
 	golang.org/x/oauth2 v0.31.0
