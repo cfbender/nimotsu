@@ -3,10 +3,37 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 mise_bin="$HOME/.local/bin/mise"
+# aube 2.x resolves from aubepkg/aube, which older mise releases cannot verify.
+mise_version="2026.10.17"
 
-if [[ ! -x "$mise_bin" ]]; then
-  echo "Installing mise"
-  curl -fsSL https://mise.run | sh
+installed_mise_version=""
+if [[ -x "$mise_bin" ]]; then
+  installed_mise_version="$("$mise_bin" --version | awk '{print $1}')"
+fi
+
+if [[ "$(printf '%s\n%s\n' "$mise_version" "$installed_mise_version" | sort -V | head -n1)" != "$mise_version" ]]; then
+  echo "Installing mise $mise_version"
+  case "$(uname -m)" in
+    x86_64)
+      mise_target="linux-x64-musl"
+      mise_sha256="54dc5f1a0de14bddf70a4d8273603647c140eedd8b9d083a8f73ca13a9a82f53"
+      ;;
+    aarch64 | arm64)
+      mise_target="linux-arm64-musl"
+      mise_sha256="745a1a5401c42090953a8da493243d5c666fffc2c98f9a3dee33bd8afc77a9ee"
+      ;;
+    *)
+      echo "Unsupported architecture: $(uname -m)" >&2
+      exit 1
+      ;;
+  esac
+  mise_tmp="$(mktemp -d)"
+  trap 'rm -rf "$mise_tmp"' EXIT
+  curl -fsSLo "$mise_tmp/mise.tar.gz" "https://github.com/jdx/mise/releases/download/v$mise_version/mise-v$mise_version-$mise_target.tar.gz"
+  echo "$mise_sha256  $mise_tmp/mise.tar.gz" | sha256sum -c --quiet
+  tar -xzf "$mise_tmp/mise.tar.gz" -C "$mise_tmp"
+  mkdir -p "$(dirname "$mise_bin")"
+  install -m 0755 "$mise_tmp/mise/bin/mise" "$mise_bin"
 fi
 
 if ! command -v python3 >/dev/null; then
